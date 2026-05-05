@@ -4,6 +4,8 @@ import { Sidebar } from "@/components/dashboard/sidebar";
 import { Topbar } from "@/components/dashboard/topbar";
 import { WalletProvider } from "@/lib/wallet-context";
 
+export const dynamic = "force-dynamic";
+
 export default function ShellLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
     <WalletProvider>
