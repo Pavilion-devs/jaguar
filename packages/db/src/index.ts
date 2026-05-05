@@ -22,6 +22,7 @@ import type {
 } from "@jaguar/domain";
 import { ALERT_TYPES } from "@jaguar/domain";
 import { scoreLaunch, scoreLaunchBoard } from "@jaguar/scoring";
+import { PrismaPg } from "@prisma/adapter-pg";
 import {
   type Prisma,
   PrismaClient,
@@ -33,15 +34,31 @@ const globalForPrisma = globalThis as unknown as {
   prisma?: PrismaClient;
 };
 
-export const prisma =
-  globalForPrisma.prisma ??
-  new PrismaClient({
+const createPrismaClient = () => {
+  const connectionString = process.env.DATABASE_URL;
+
+  if (!connectionString) {
+    throw new Error("DATABASE_URL is required before Jaguar can read or write launch data.");
+  }
+
+  return new PrismaClient({
+    adapter: new PrismaPg({ connectionString }),
     log: process.env.NODE_ENV === "development" ? ["warn", "error"] : ["error"],
   });
+};
 
-if (process.env.NODE_ENV !== "production") {
-  globalForPrisma.prisma = prisma;
-}
+const getPrismaClient = () => {
+  globalForPrisma.prisma ??= createPrismaClient();
+  return globalForPrisma.prisma;
+};
+
+export const prisma = new Proxy({} as PrismaClient, {
+  get(_target, prop, receiver) {
+    const client = getPrismaClient();
+    const value = Reflect.get(client, prop, receiver);
+    return typeof value === "function" ? value.bind(client) : value;
+  },
+});
 
 const launchWithStateInclude = {
   state: true,

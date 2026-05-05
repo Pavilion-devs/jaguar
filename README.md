@@ -41,7 +41,7 @@ Most launch tools dump raw alerts and static scores. Jaguar does three things th
 | DEX coverage | Raydium, Pump.fun, Meteora, Orca, Moonshot |
 | AI analyst | Claude (Anthropic) via structured output |
 | Frontend | Next.js 15, Tailwind v4 |
-| Database | SQLite via Prisma |
+| Database | Supabase Postgres via Prisma |
 | Monorepo | pnpm workspaces |
 
 ---
@@ -73,7 +73,7 @@ pnpm install
 **2. Set up environment**
 ```bash
 cp .env.example .env
-# Fill in GOLDRUSH_API_KEY and ANTHROPIC_API_KEY
+# Fill in Supabase Postgres URLs, GOLDRUSH_API_KEY, and ANTHROPIC_API_KEY
 ```
 
 **3. Set up the database**
@@ -106,7 +106,8 @@ The dashboard populates as the worker ingests live Solana launch data from GoldR
 |---|---|
 | `GOLDRUSH_API_KEY` | GoldRush API key — get one at [goldrush.dev](https://goldrush.dev) |
 | `ANTHROPIC_API_KEY` | Anthropic API key for Claude analyst memos |
-| `DATABASE_URL` | SQLite connection string (default: `file:../../../data/jaguar.db`) |
+| `DATABASE_URL` | Supabase pooled Postgres connection string for app/runtime traffic |
+| `DIRECT_URL` | Supabase direct/session Postgres connection string for Prisma schema changes |
 | `JAGUAR_AGENT_PROVIDER` | `claude` or `openai` (default: `openai`) |
 | `OPENAI_API_KEY` | OpenAI key — only needed if using OpenAI provider |
 

@@ -14,18 +14,6 @@ try {
   // Ignored on purpose - in production the env is injected by the host.
 }
 
-// Prisma resolves relative "file:" URLs against the schema.prisma location at
-// generate time. Next.js bundling relocates the Prisma runtime during dev and
-// build, so that base path changes and the sqlite file cannot be found. Rewrite
-// to absolute here, using the same schema-relative rule, so the resolved path
-// is unambiguous regardless of where Next loads the client from.
-const databaseUrl = process.env.DATABASE_URL;
-if (databaseUrl?.startsWith("file:") && !databaseUrl.startsWith("file:/")) {
-  const relativePath = databaseUrl.slice("file:".length);
-  const schemaDir = resolve(monorepoRoot, "packages/db/prisma");
-  process.env.DATABASE_URL = `file:${resolve(schemaDir, relativePath)}`;
-}
-
 const nextConfig: NextConfig = {
   transpilePackages: [
     "@jaguar/agent",

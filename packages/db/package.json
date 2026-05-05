@@ -8,18 +8,22 @@
   "dependencies": {
     "@jaguar/domain": "workspace:*",
     "@jaguar/scoring": "workspace:*",
-    "@prisma/client": "^6.7.0"
+    "@prisma/adapter-pg": "^6.19.3",
+    "@prisma/client": "^6.7.0",
+    "pg": "^8.20.0"
   },
   "devDependencies": {
     "@types/node": "^22.15.17",
+    "@types/pg": "^8.20.0",
     "prisma": "^6.7.0",
     "tsx": "^4.19.4",
     "vitest": "^2.1.9"
   },
   "scripts": {
     "db:generate": "prisma generate --schema ./prisma/schema.prisma",
-    "db:push": "DATABASE_URL=${DATABASE_URL:-file:../../../data/jaguar.db} prisma db push --schema ./prisma/schema.prisma",
-    "db:migrate": "DATABASE_URL=${DATABASE_URL:-file:../../../data/jaguar.db} prisma migrate dev --schema ./prisma/schema.prisma",
+    "db:push": "prisma db push --schema ./prisma/schema.prisma",
+    "db:migrate": "prisma migrate dev --schema ./prisma/schema.prisma",
+    "db:deploy": "prisma migrate deploy --schema ./prisma/schema.prisma",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   }
