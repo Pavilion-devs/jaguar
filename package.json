@@ -18,5 +18,15 @@
   "devDependencies": {
     "@biomejs/biome": "^1.9.4",
     "typescript": "^5.8.3"
+  },
+  "pnpm": {
+    "allowedBuiltDependencies": [
+      "@biomejs/biome",
+      "@prisma/client",
+      "@prisma/engines",
+      "esbuild",
+      "prisma",
+      "sharp"
+    ]
   }
 }
