@@ -25,6 +25,7 @@ data/*.db-shm
 
 # Prisma generated client (regenerated on install)
 packages/db/generated
+apps/web/generated
 
 # Internal planning & session files
 plan.md
@@ -33,4 +34,3 @@ architecture.md
 spec.md
 *.html
 tmp/
-

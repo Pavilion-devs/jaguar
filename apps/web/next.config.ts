@@ -15,6 +15,9 @@ try {
 }
 
 const nextConfig: NextConfig = {
+  outputFileTracingIncludes: {
+    "/*": ["./generated/client/**/*", "../../packages/db/generated/client/**/*"],
+  },
   transpilePackages: [
     "@jaguar/agent",
     "@jaguar/db",

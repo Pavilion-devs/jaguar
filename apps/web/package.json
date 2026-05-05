@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "prebuild": "pnpm --filter @jaguar/db db:generate",
+    "prebuild": "pnpm --filter @jaguar/db db:generate && mkdir -p generated/client && cp ../../packages/db/generated/client/query_* generated/client/",
     "build": "next build",
     "start": "next start",
     "typecheck": "tsc --noEmit"
