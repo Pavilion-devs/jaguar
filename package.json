@@ -1,0 +1,22 @@
+{
+  "name": "jaguar",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "pnpm@10.10.0",
+  "scripts": {
+    "dev:web": "pnpm --filter @jaguar/web dev",
+    "dev:worker": "pnpm --filter @jaguar/worker dev",
+    "build": "pnpm -r --if-present build",
+    "typecheck": "pnpm -r --if-present typecheck",
+    "test": "pnpm -r --if-present test",
+    "lint": "pnpm exec biome check .",
+    "format": "pnpm exec biome format --write .",
+    "db:generate": "pnpm --filter @jaguar/db db:generate",
+    "db:push": "pnpm --filter @jaguar/db db:push",
+    "db:migrate": "pnpm --filter @jaguar/db db:migrate"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^1.9.4",
+    "typescript": "^5.8.3"
+  }
+}

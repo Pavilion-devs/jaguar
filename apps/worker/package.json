@@ -1,0 +1,22 @@
+{
+  "name": "@jaguar/worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node --env-file-if-exists ../../.env --import tsx ./src/index.ts",
+    "start": "node --enable-source-maps dist/index.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@jaguar/agent": "workspace:*",
+    "@jaguar/db": "workspace:*",
+    "@jaguar/domain": "workspace:*",
+    "@jaguar/goldrush": "workspace:*",
+    "@jaguar/scoring": "workspace:*",
+    "tsx": "^4.19.4"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.17"
+  }
+}

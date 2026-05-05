@@ -1,0 +1,260 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../generated/client"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+enum Verdict {
+  ignore
+  watch
+  enter
+}
+
+enum Persona {
+  degen
+  momentum
+  risk_first
+}
+
+enum LaunchStatus {
+  discovering
+  tracked
+  archived
+}
+
+enum TrackingTier {
+  cold
+  warm
+  hot
+}
+
+enum Severity {
+  info
+  warn
+  critical
+}
+
+model Launch {
+  id                String           @id @default(cuid())
+  chainName         String
+  protocol          String
+  protocolVersion   String?
+  txHash            String?
+  eventName         String?
+  deployerAddress   String?
+  pairAddress       String           @unique
+  pairName          String?
+  baseTokenAddress  String
+  baseTokenName     String?
+  baseTokenSymbol   String
+  quoteTokenAddress String
+  quoteTokenName    String?
+  quoteTokenSymbol String
+  supply           Float?
+  devHoldings      Float?
+  firstSeenAt       DateTime
+  lastSeenAt        DateTime?
+  currentStatus     LaunchStatus     @default(discovering)
+  trackingTier      TrackingTier     @default(cold)
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+  events            LaunchEvent[]
+  pairCandles       LaunchPairCandle[]
+  tokenCandles      LaunchTokenCandle[]
+  state             LaunchState?
+  timelines         LaunchTimeline[]
+  recommendations   Recommendation[]
+  alerts            Alert[]
+  memos             LaunchMemo[]
+}
+
+model LaunchEvent {
+  id           String   @id @default(cuid())
+  launchId     String
+  eventType    String
+  eventTime    DateTime
+  sourceStream String
+  payloadJson  String
+  ingestedAt   DateTime @default(now())
+  launch       Launch   @relation(fields: [launchId], references: [id], onDelete: Cascade)
+
+  @@index([launchId, eventTime])
+}
+
+model LaunchState {
+  launchId            String   @id
+  lastEventAt         DateTime
+  lastPairCandleAt    DateTime?
+  lastTokenCandleAt   DateTime?
+  currentQuoteRate    Float?
+  currentQuoteRateUsd Float?
+  currentLiquidityUsd Float?
+  currentVolume1mUsd  Float?
+  currentMarketCapUsd Float?
+  currentVolume5mUsd  Float?
+  currentVolume15mUsd Float?
+  currentVolume1hUsd  Float?
+  priceChange1mPct    Float?
+  currentSwapCount5m  Int?
+  currentSwapCount1h  Int?
+  priceChange5mPct    Float?
+  priceChange15mPct   Float?
+  priceChange1hPct    Float?
+  scoreGlobal         Int      @default(0)
+  delta1m             Int      @default(0)
+  delta5m             Int      @default(0)
+  delta15m            Int      @default(0)
+  delta1h             Int      @default(0)
+  verdictGlobal       Verdict  @default(ignore)
+  verdictMomentum     Verdict  @default(ignore)
+  verdictDegen        Verdict  @default(ignore)
+  verdictRiskFirst    Verdict  @default(ignore)
+  reasonCodesJson     String?
+  invalidatorsJson    String?
+  updatedAt           DateTime @updatedAt
+  launch              Launch   @relation(fields: [launchId], references: [id], onDelete: Cascade)
+}
+
+model LaunchTimeline {
+  id          String   @id @default(cuid())
+  launchId    String
+  timeBucket  String
+  title       String
+  summary     String
+  severity    Severity @default(info)
+  detailsJson String?
+  createdAt   DateTime @default(now())
+  launch      Launch   @relation(fields: [launchId], references: [id], onDelete: Cascade)
+
+  @@index([launchId, createdAt])
+}
+
+model LaunchPairCandle {
+  id           String   @id @default(cuid())
+  launchId      String
+  interval      String
+  timeframe     String
+  timestamp     DateTime
+  open          Float
+  high          Float
+  low           Float
+  close         Float
+  volume        Float?
+  volumeUsd     Float?
+  quoteRate     Float?
+  quoteRateUsd  Float?
+  createdAt     DateTime @default(now())
+  launch        Launch   @relation(fields: [launchId], references: [id], onDelete: Cascade)
+
+  @@unique([launchId, interval, timeframe, timestamp])
+  @@index([launchId, timestamp])
+}
+
+model LaunchTokenCandle {
+  id                 String   @id @default(cuid())
+  launchId           String
+  primaryPairAddress String?
+  interval           String
+  timeframe          String
+  timestamp          DateTime
+  open               Float
+  high               Float
+  low                Float
+  close              Float
+  volume             Float?
+  volumeUsd          Float?
+  quoteRate          Float?
+  quoteRateUsd       Float?
+  createdAt          DateTime @default(now())
+  launch             Launch   @relation(fields: [launchId], references: [id], onDelete: Cascade)
+
+  @@unique([launchId, interval, timeframe, timestamp])
+  @@index([launchId, timestamp])
+}
+
+model Recommendation {
+  id                 String                  @id @default(cuid())
+  launchId           String
+  persona            Persona
+  verdict            Verdict
+  scoreAtEntry       Int
+  priceAtEntry       Float
+  liquidityAtEntry   Float?
+  marketCapAtEntry   Float?
+  rationaleJson      String
+  issuedAt           DateTime                @default(now())
+  evaluationStatus   String                  @default("pending")
+  evaluatedAt        DateTime?
+  launch             Launch                  @relation(fields: [launchId], references: [id], onDelete: Cascade)
+  outcomes           RecommendationOutcome[]
+
+  @@index([launchId, persona, issuedAt])
+}
+
+model RecommendationOutcome {
+  id               String          @id @default(cuid())
+  recommendationId String
+  evaluationWindow String
+  priceChangePct   Float
+  maxUpsidePct     Float
+  maxDrawdownPct   Float
+  outcomeLabel     String
+  computedAt       DateTime        @default(now())
+  recommendation   Recommendation  @relation(fields: [recommendationId], references: [id], onDelete: Cascade)
+
+  @@unique([recommendationId, evaluationWindow])
+}
+
+model Alert {
+  id          String   @id @default(cuid())
+  launchId    String
+  alertType   String
+  title       String
+  body        String
+  severity    Severity @default(info)
+  payloadJson String?
+  deliveredTo String?
+  createdAt   DateTime @default(now())
+  launch      Launch   @relation(fields: [launchId], references: [id], onDelete: Cascade)
+
+  @@index([launchId, createdAt])
+}
+
+model LaunchMemo {
+  id              String   @id @default(cuid())
+  launchId        String
+  scoreAtMemo     Int
+  verdictAtMemo   Verdict
+  reasonsJson     String
+  headline        String?
+  bull            String
+  bear            String
+  verdict         String
+  confidence      Int
+  modelUsed       String
+  inputTokens     Int      @default(0)
+  outputTokens    Int      @default(0)
+  cacheReadTokens Int      @default(0)
+  generatedAt     DateTime @default(now())
+  launch          Launch   @relation(fields: [launchId], references: [id], onDelete: Cascade)
+
+  @@index([launchId, generatedAt])
+}
+
+model WorkerHeartbeat {
+  workerKey                 String   @id
+  chainName                 String
+  streamUrl                 String
+  startedAt                 DateTime
+  heartbeatAt               DateTime
+  trackedProtocolCount      Int
+  trackedPairCount          Int
+  pairCandleCandidateCount  Int
+  tokenCandleCandidateCount Int
+  createdAt                 DateTime @default(now())
+  updatedAt                 DateTime @updatedAt
+}

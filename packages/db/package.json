@@ -1,0 +1,26 @@
+{
+  "name": "@jaguar/db",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "dependencies": {
+    "@jaguar/domain": "workspace:*",
+    "@jaguar/scoring": "workspace:*",
+    "@prisma/client": "^6.7.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.17",
+    "prisma": "^6.7.0",
+    "tsx": "^4.19.4",
+    "vitest": "^2.1.9"
+  },
+  "scripts": {
+    "db:generate": "prisma generate --schema ./prisma/schema.prisma",
+    "db:push": "DATABASE_URL=${DATABASE_URL:-file:../../../data/jaguar.db} prisma db push --schema ./prisma/schema.prisma",
+    "db:migrate": "DATABASE_URL=${DATABASE_URL:-file:../../../data/jaguar.db} prisma migrate dev --schema ./prisma/schema.prisma",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  }
+}

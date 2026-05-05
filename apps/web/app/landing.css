@@ -1,0 +1,55 @@
+/* Custom animation utilities for the landing page */
+
+@keyframes wave {
+  0% { transform: translateX(0); }
+  100% { transform: translateX(-1440px); }
+}
+.animate-wave-1 { animation: wave 18s linear infinite; }
+.animate-wave-2 { animation: wave 25s linear infinite; }
+.animate-wave-3 { animation: wave 14s linear infinite; }
+
+@keyframes aura {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.05); }
+}
+.animate-aura { animation: aura 15s ease-in-out infinite; }
+
+@keyframes marquee {
+  0% { transform: translateX(0); }
+  100% { transform: translateX(-50%); }
+}
+.animate-marquee { animation: marquee 35s linear infinite; }
+
+@keyframes revealWord {
+  from {
+    transform: translateY(110%) rotate(3deg);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0) rotate(0deg);
+    opacity: 1;
+  }
+}
+.animate-reveal-word {
+  animation: revealWord 0.85s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes fadeUpDelayed {
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.animate-fade-up-delayed {
+  animation: fadeUpDelayed 0.8s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  opacity: 0;
+  transform: translateY(20px);
+}
+
+@keyframes fadeInUp {
+  from { opacity: 0; transform: translateY(20px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.animate-fade-in-up {
+  animation: fadeInUp 0.8s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}

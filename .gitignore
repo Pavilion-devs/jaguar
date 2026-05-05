@@ -1,0 +1,36 @@
+# Dependencies
+node_modules
+
+# Next.js
+.next
+.turbo
+
+# Build outputs
+dist
+coverage
+
+# Environment — never commit secrets
+.env
+.env.local
+.env*.local
+
+# macOS
+.DS_Store
+
+# SQLite database files (local only)
+data/*.db
+data/*.db-journal
+data/*.db-wal
+data/*.db-shm
+
+# Prisma generated client (regenerated on install)
+packages/db/generated
+
+# Internal planning & session files
+plan.md
+AGENTS.md
+architecture.md
+spec.md
+*.html
+tmp/
+
