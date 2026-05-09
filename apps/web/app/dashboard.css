@@ -1649,16 +1649,24 @@
   & .gauge-wrap {
     display: grid;
     place-items: center;
-    padding: 8px 0 4px;
+    padding: 4px 0 2px;
     position: relative;
+    min-height: 168px;
+  }
+
+  & .gauge-svg {
+    width: min(100%, 260px);
+    height: auto;
+    overflow: visible;
   }
 
   & .gauge-value {
     position: absolute;
     left: 50%;
-    top: 58%;
+    top: 64%;
     transform: translate(-50%, -50%);
     text-align: center;
+    width: min(180px, 72%);
   }
 
   & .gauge-value .pct {

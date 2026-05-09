@@ -34,3 +34,4 @@ architecture.md
 spec.md
 *.html
 tmp/
+.vercel

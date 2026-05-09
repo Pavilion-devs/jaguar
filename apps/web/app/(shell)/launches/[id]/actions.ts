@@ -4,10 +4,12 @@ import { revalidatePath } from "next/cache";
 
 import { generateLaunchMemo } from "@jaguar/agent";
 import { getLaunchDetail, saveAgentMemo } from "@jaguar/db";
+import type { AgentMemoRecord } from "@jaguar/domain";
 
 export type GenerateMemoState = {
   ok: boolean;
   error?: string;
+  memo?: AgentMemoRecord;
 };
 
 export async function generateAgentDebate(launchId: string): Promise<GenerateMemoState> {
@@ -22,7 +24,7 @@ export async function generateAgentDebate(launchId: string): Promise<GenerateMem
       recentTimeline: detail.timeline,
     });
 
-    await saveAgentMemo({
+    const savedMemo = await saveAgentMemo({
       launchId,
       scoreAtMemo: detail.launch.score,
       verdictAtMemo: detail.launch.verdict,
@@ -39,7 +41,7 @@ export async function generateAgentDebate(launchId: string): Promise<GenerateMem
     });
 
     revalidatePath(`/launches/${launchId}`);
-    return { ok: true };
+    return { ok: true, memo: savedMemo };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Agent generation failed.";
     return { ok: false, error: message };

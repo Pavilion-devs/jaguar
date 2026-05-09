@@ -12,9 +12,8 @@ export default function ShellError({ error, reset }: ErrorProps) {
         <div>
           <h1>Something broke.</h1>
           <div className="sub">
-            This is usually a local database, worker, or dependency issue. Retry first. If it
-            persists, check that the worker is ingesting GoldRush data and that Prisma can read the
-            local SQLite database.
+            This is usually a database, worker, or dependency issue. Retry first. If it persists,
+            check that the worker is ingesting GoldRush data and that Prisma can read the database.
           </div>
         </div>
       </div>

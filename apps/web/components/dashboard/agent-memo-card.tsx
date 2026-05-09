@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useTransition } from "react";
+import { useRouter } from "next/navigation";
+import { useEffect, useRef, useState, useTransition } from "react";
 
 import type { AgentMemoRecord, Persona, Verdict } from "@jaguar/domain";
 
@@ -49,6 +50,22 @@ function LoadingState() {
         </span>
       </div>
       <div className="memo-loading-sub">reading signals, back in a sec</div>
+    </div>
+  );
+}
+
+function ErrorState({ message, onRetry, isPending }: {
+  message: string;
+  onRetry: () => void;
+  isPending: boolean;
+}) {
+  return (
+    <div className="memo-loading">
+      <div className="memo-loading-text">memo failed</div>
+      <div className="memo-loading-sub">{message}</div>
+      <button className="btn ghost memo-retry" type="button" onClick={onRetry} disabled={isPending}>
+        {isPending ? "Retrying…" : "Retry"}
+      </button>
     </div>
   );
 }
@@ -103,16 +120,45 @@ export function AgentMemoCard({
   activePersona,
   activePersonaLabel,
 }: Props) {
+  const router = useRouter();
   const [isPending, startTransition] = useTransition();
+  const [memo, setMemo] = useState(agentMemo);
+  const [error, setError] = useState<string | null>(null);
+  const attemptedKeyRef = useRef<string | null>(null);
 
   useEffect(() => {
-    const needsGeneration = !agentMemo || isStale(agentMemo, currentScore);
-    if (needsGeneration) {
-      startTransition(async () => {
-        await generateAgentDebate(launchId);
-      });
+    setMemo(agentMemo);
+    setError(null);
+    attemptedKeyRef.current = null;
+  }, [agentMemo, launchId]);
+
+  const generateMemo = (force = false) => {
+    const generationKey = `${launchId}:${currentScore}:${memo?.id ?? "none"}`;
+    if (!force && attemptedKeyRef.current === generationKey) {
+      return;
     }
-  }, [launchId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+    attemptedKeyRef.current = generationKey;
+    setError(null);
+
+    startTransition(async () => {
+      const result = await generateAgentDebate(launchId);
+      if (result.ok && result.memo) {
+        setMemo(result.memo);
+        router.refresh();
+        return;
+      }
+
+      setError(result.error ?? "Agent memo generation failed.");
+    });
+  };
+
+  useEffect(() => {
+    const needsGeneration = !memo || isStale(memo, currentScore);
+    if (needsGeneration) {
+      generateMemo();
+    }
+  }, [launchId, currentScore, memo]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className="card c-conviction">
@@ -126,12 +172,14 @@ export function AgentMemoCard({
       <div className="memo-panel">
         {isPending ? (
           <LoadingState />
-        ) : agentMemo ? (
+        ) : memo ? (
           <MemoBody
-            memo={agentMemo}
+            memo={memo}
             currentScore={currentScore}
             currentVerdict={currentVerdict}
           />
+        ) : error ? (
+          <ErrorState message={error} onRetry={() => generateMemo(true)} isPending={isPending} />
         ) : (
           <LoadingState />
         )}

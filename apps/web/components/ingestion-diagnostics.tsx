@@ -66,7 +66,7 @@ export function IngestionDiagnostics({ diagnostics }: IngestionDiagnosticsProps)
     <section className="rounded-3xl border border-border/80 bg-card/95 p-5 shadow-sm">
       <h2 className="text-base font-semibold">Ingestion diagnostics</h2>
       <p className="mt-2 text-sm leading-7 text-muted-foreground">
-        Real delivery counts from persisted GoldRush events and current SQLite-driven candidate
+        Real delivery counts from persisted GoldRush events and current database-driven candidate
         selection. If token fallback starts landing, it will move here first.
       </p>
 

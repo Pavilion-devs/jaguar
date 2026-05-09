@@ -5,7 +5,7 @@ export default function ShellLoading() {
       <div className="page-head">
         <div>
           <h1 style={{ color: "var(--ink-dim)" }}>Loading…</h1>
-          <div className="sub">Reading from the local SQLite database.</div>
+          <div className="sub">Loading latest signals…</div>
         </div>
       </div>
       <div className="dash-grid">

@@ -6,20 +6,7 @@ type Props = {
   failedCount: number;
 };
 
-const CX = 110;
-const CY = 120;
-const R = 90;
-
-// SVG arc endpoint for a given percent along a 180° gauge from (20, 120) on the
-// left through the top to (200, 120) on the right.
-const arcEndpoint = (percent: number) => {
-  const clamped = Math.max(0, Math.min(100, percent));
-  const angle = (1 - clamped / 100) * Math.PI;
-  return {
-    x: +(CX + R * Math.cos(angle)).toFixed(2),
-    y: +(CY - R * Math.sin(angle)).toFixed(2),
-  };
-};
+const GAUGE_ARC = "M 30 124 A 90 90 0 0 1 210 124";
 
 export function WinrateGauge({
   percent,
@@ -28,9 +15,8 @@ export function WinrateGauge({
   openCount,
   failedCount,
 }: Props) {
-  const end = arcEndpoint(percent);
-  const largeArc = percent > 50 ? 1 : 0;
-  const displayPct = Math.round(percent);
+  const clampedPercent = Math.max(0, Math.min(100, percent));
+  const displayPct = Math.round(clampedPercent);
 
   return (
     <div className="card c-progress">
@@ -46,7 +32,7 @@ export function WinrateGauge({
         </div>
       </div>
       <div className="gauge-wrap">
-        <svg width={220} height={140} viewBox="0 0 220 140">
+        <svg className="gauge-svg" viewBox="0 0 240 160" role="img" aria-label={`Win rate ${displayPct}%`}>
           <title>Win rate gauge</title>
           <defs>
             <pattern
@@ -61,27 +47,32 @@ export function WinrateGauge({
             </pattern>
           </defs>
           <path
-            d="M 20 120 A 90 90 0 0 1 200 120"
+            d={GAUGE_ARC}
             fill="none"
             stroke="url(#gaugeStripe)"
             strokeWidth={26}
             strokeLinecap="round"
+            pathLength={100}
           />
-          {percent > 0 ? (
+          {clampedPercent > 0 ? (
             <>
               <path
-                d={`M 20 120 A 90 90 0 ${largeArc} 1 ${end.x} ${end.y}`}
+                d={GAUGE_ARC}
                 fill="none"
                 stroke="#14593a"
                 strokeWidth={26}
                 strokeLinecap="round"
+                pathLength={100}
+                strokeDasharray={`${clampedPercent} ${100 - clampedPercent}`}
               />
               <path
-                d={`M 20 120 A 90 90 0 ${largeArc} 1 ${end.x} ${end.y}`}
+                d={GAUGE_ARC}
                 fill="none"
                 stroke="#2ea86b"
                 strokeWidth={16}
                 strokeLinecap="round"
+                pathLength={100}
+                strokeDasharray={`${clampedPercent} ${100 - clampedPercent}`}
               />
             </>
           ) : null}

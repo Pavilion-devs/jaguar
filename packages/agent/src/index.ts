@@ -261,7 +261,6 @@ const generateClaudeLaunchMemo = async ({
   const response = await client.messages.parse({
     model: CLAUDE_MODEL,
     max_tokens: 4096,
-    thinking: { type: "adaptive" },
     system: [
       {
         type: "text",

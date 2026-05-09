@@ -79,7 +79,7 @@ export default async function LookupPage({ searchParams }: PageProps) {
         <div className="card lookup-stat">
           <span>Tracked matches</span>
           <strong>{localCount}</strong>
-          <small>Persisted in Jaguar SQLite</small>
+          <small>Persisted in Jaguar database</small>
         </div>
         <div className="card lookup-stat">
           <span>Linked pairs</span>
