@@ -1,5 +1,6 @@
 # Dependencies
 node_modules
+.corepack
 
 # Next.js
 .next
@@ -13,6 +14,8 @@ coverage
 .env
 .env.local
 .env*.local
+tierhive_jaguar
+tierhive_jaguar.pub
 
 # macOS
 .DS_Store

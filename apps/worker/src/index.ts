@@ -27,6 +27,9 @@ const MAX_TRACKED_PAIRS = 50;
 const MAX_CANDLE_PAIRS = 12;
 const MAX_CANDLE_TOKENS = 24;
 const HEARTBEAT_INTERVAL_MS = 20_000;
+const MIN_SUBSCRIPTION_REFRESH_MS = 15_000;
+const STREAM_RECONNECT_DELAY_MS = 5_000;
+const STREAM_IDLE_RECONNECT_MS = 10 * 60_000;
 const ANALYST_COOLDOWN_MS = 10 * 60_000;
 const ANALYST_STALE_SCORE_DRIFT = 8;
 const MAX_ANALYST_QUEUE = 25;
@@ -164,6 +167,10 @@ class UpdateStreamCoordinator {
   private disposeUpdateStream: (() => void) | null = null;
   private disposePairCandleStream: (() => void) | null = null;
   private disposeTokenCandleStream: (() => void) | null = null;
+  private reconnectTimer: NodeJS.Timeout | null = null;
+  private idleWatchdogTimer: NodeJS.Timeout | null = null;
+  private lastSubscriptionRefreshAt = 0;
+  private lastStreamEventAt = Date.now();
   private activeSubscriptionVersion = 0;
   private isShuttingDown = false;
 
@@ -203,12 +210,13 @@ class UpdateStreamCoordinator {
         pairAddress,
         ...this.trackedPairAddresses.filter((value) => value !== pairAddress),
       ];
-    } else {
-      this.trackedPairAddresses = [pairAddress, ...this.trackedPairAddresses].slice(
-        0,
-        MAX_TRACKED_PAIRS,
-      );
+      return;
     }
+
+    this.trackedPairAddresses = [pairAddress, ...this.trackedPairAddresses].slice(
+      0,
+      MAX_TRACKED_PAIRS,
+    );
 
     if (scheduleRefresh) {
       this.scheduleRefresh();
@@ -221,12 +229,13 @@ class UpdateStreamCoordinator {
         pairAddress,
         ...this.candlePairAddresses.filter((value) => value !== pairAddress),
       ];
-    } else {
-      this.candlePairAddresses = [pairAddress, ...this.candlePairAddresses].slice(
-        0,
-        MAX_CANDLE_PAIRS,
-      );
+      return;
     }
+
+    this.candlePairAddresses = [pairAddress, ...this.candlePairAddresses].slice(
+      0,
+      MAX_CANDLE_PAIRS,
+    );
 
     if (scheduleRefresh) {
       this.scheduleRefresh();
@@ -243,12 +252,13 @@ class UpdateStreamCoordinator {
         tokenAddress,
         ...this.candleTokenAddresses.filter((value) => value !== tokenAddress),
       ];
-    } else {
-      this.candleTokenAddresses = [tokenAddress, ...this.candleTokenAddresses].slice(
-        0,
-        MAX_CANDLE_TOKENS,
-      );
+      return;
     }
+
+    this.candleTokenAddresses = [tokenAddress, ...this.candleTokenAddresses].slice(
+      0,
+      MAX_CANDLE_TOKENS,
+    );
 
     if (scheduleRefresh) {
       this.scheduleRefresh();
@@ -263,17 +273,90 @@ class UpdateStreamCoordinator {
     };
   }
 
+  isClosed() {
+    return this.isShuttingDown;
+  }
+
   private scheduleRefresh() {
     if (this.refreshTimer) {
-      clearTimeout(this.refreshTimer);
+      return;
     }
 
+    const elapsedMs = Date.now() - this.lastSubscriptionRefreshAt;
+    const delayMs = Math.max(300, MIN_SUBSCRIPTION_REFRESH_MS - elapsedMs);
     this.refreshTimer = setTimeout(() => {
+      this.refreshTimer = null;
       this.refreshSubscription();
-    }, 300);
+    }, delayMs);
+  }
+
+  private markStreamEvent() {
+    this.lastStreamEventAt = Date.now();
+  }
+
+  private isStaleSubscriptionSignal(subscriptionVersion: number) {
+    return this.isShuttingDown || subscriptionVersion !== this.activeSubscriptionVersion;
+  }
+
+  private scheduleReconnect(reason: string, subscriptionVersion: number) {
+    if (this.isStaleSubscriptionSignal(subscriptionVersion) || this.reconnectTimer) {
+      return;
+    }
+
+    console.warn(
+      `${reason}; reconnecting tracked GoldRush streams in ${STREAM_RECONNECT_DELAY_MS}ms.`,
+    );
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      if (this.isStaleSubscriptionSignal(subscriptionVersion)) {
+        return;
+      }
+      this.refreshSubscription();
+    }, STREAM_RECONNECT_DELAY_MS);
+  }
+
+  private startIdleWatchdog(subscriptionVersion: number) {
+    if (this.idleWatchdogTimer) {
+      clearInterval(this.idleWatchdogTimer);
+    }
+
+    const checkIntervalMs = Math.min(
+      Math.max(Math.floor(STREAM_IDLE_RECONNECT_MS / 2), 30_000),
+      60_000,
+    );
+    this.idleWatchdogTimer = setInterval(() => {
+      if (
+        this.isStaleSubscriptionSignal(subscriptionVersion) ||
+        this.trackedPairAddresses.length === 0
+      ) {
+        return;
+      }
+
+      const idleMs = Date.now() - this.lastStreamEventAt;
+      if (idleMs >= STREAM_IDLE_RECONNECT_MS) {
+        this.scheduleReconnect(
+          `Tracked GoldRush streams have been idle for ${Math.round(idleMs / 1000)}s`,
+          subscriptionVersion,
+        );
+      }
+    }, checkIntervalMs);
   }
 
   private refreshSubscription() {
+    this.lastSubscriptionRefreshAt = Date.now();
+
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+
+    if (this.idleWatchdogTimer) {
+      clearInterval(this.idleWatchdogTimer);
+      this.idleWatchdogTimer = null;
+    }
+
+    const subscriptionVersion = this.activeSubscriptionVersion + 1;
+    this.activeSubscriptionVersion = subscriptionVersion;
     const previousDispose = this.disposeUpdateStream;
     this.disposeUpdateStream = null;
     previousDispose?.();
@@ -289,12 +372,12 @@ class UpdateStreamCoordinator {
       return;
     }
 
+    this.lastStreamEventAt = Date.now();
     console.log(
       `Subscribing to updatePairs for ${this.trackedPairAddresses.length} live pair addresses.`,
     );
 
-    const subscriptionVersion = this.activeSubscriptionVersion + 1;
-    this.activeSubscriptionVersion = subscriptionVersion;
+    this.startIdleWatchdog(subscriptionVersion);
 
     this.disposeUpdateStream = subscribeToUpdatePairs(
       this.client,
@@ -302,6 +385,7 @@ class UpdateStreamCoordinator {
       this.trackedPairAddresses,
       {
         next: async (event) => {
+          this.markStreamEvent();
           const result = await this.runSerial(() => applyLaunchUpdate(event));
 
           if (event.base_token?.contract_address) {
@@ -331,12 +415,14 @@ class UpdateStreamCoordinator {
         },
         error: (error) => {
           console.error("updatePairs subscription error", error);
+          this.scheduleReconnect("updatePairs subscription error", subscriptionVersion);
         },
         complete: () => {
-          if (this.isShuttingDown || subscriptionVersion !== this.activeSubscriptionVersion) {
+          if (this.isStaleSubscriptionSignal(subscriptionVersion)) {
             return;
           }
           console.warn("updatePairs subscription completed");
+          this.scheduleReconnect("updatePairs subscription completed", subscriptionVersion);
         },
       },
     );
@@ -357,6 +443,7 @@ class UpdateStreamCoordinator {
         },
         {
           next: async (event) => {
+            this.markStreamEvent();
             const result = await this.runSerial(() => applyPairOhlcvCandle(event));
 
             if (result.duplicate) {
@@ -371,12 +458,17 @@ class UpdateStreamCoordinator {
           },
           error: (error) => {
             console.error("ohlcvCandlesForPair subscription error", error);
+            this.scheduleReconnect("ohlcvCandlesForPair subscription error", subscriptionVersion);
           },
           complete: () => {
-            if (this.isShuttingDown || subscriptionVersion !== this.activeSubscriptionVersion) {
+            if (this.isStaleSubscriptionSignal(subscriptionVersion)) {
               return;
             }
             console.warn("ohlcvCandlesForPair subscription completed");
+            this.scheduleReconnect(
+              "ohlcvCandlesForPair subscription completed",
+              subscriptionVersion,
+            );
           },
         },
       );
@@ -402,6 +494,7 @@ class UpdateStreamCoordinator {
         },
         {
           next: async (event) => {
+            this.markStreamEvent();
             const result = await this.runSerial(() => applyTokenOhlcvCandle(event));
 
             if (result.duplicate) {
@@ -416,12 +509,17 @@ class UpdateStreamCoordinator {
           },
           error: (error) => {
             console.error("ohlcvCandlesForToken subscription error", error);
+            this.scheduleReconnect("ohlcvCandlesForToken subscription error", subscriptionVersion);
           },
           complete: () => {
-            if (this.isShuttingDown || subscriptionVersion !== this.activeSubscriptionVersion) {
+            if (this.isStaleSubscriptionSignal(subscriptionVersion)) {
               return;
             }
             console.warn("ohlcvCandlesForToken subscription completed");
+            this.scheduleReconnect(
+              "ohlcvCandlesForToken subscription completed",
+              subscriptionVersion,
+            );
           },
         },
       );
@@ -437,6 +535,12 @@ class UpdateStreamCoordinator {
 
     if (this.refreshTimer) {
       clearTimeout(this.refreshTimer);
+    }
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+    }
+    if (this.idleWatchdogTimer) {
+      clearInterval(this.idleWatchdogTimer);
     }
 
     this.disposeUpdateStream?.();
@@ -498,36 +602,114 @@ const main = async () => {
     });
   }, HEARTBEAT_INTERVAL_MS);
 
-  const disposeNewPairs = subscribeToNewPairs(client, config, {
-    next: async (event) => {
-      const result = await runSerial(() => upsertLaunchFromNewPair(event));
+  let disposeNewPairs: () => void = () => undefined;
+  let newPairsReconnectTimer: NodeJS.Timeout | null = null;
+  let newPairsIdleWatchdogTimer: NodeJS.Timeout | null = null;
+  let newPairsSubscriptionVersion = 0;
+  let lastNewPairEventAt = Date.now();
 
-      updateCoordinator.track(result.pairAddress);
-      if (event.base_token?.contract_address) {
-        updateCoordinator.trackTokenForCandles(event.base_token.contract_address);
-      }
-      if ((event.quote_rate_usd ?? 0) > 0 || (event.liquidity ?? 0) > 0) {
-        updateCoordinator.trackForCandles(result.pairAddress);
-      }
-      if (result.duplicate) {
+  const scheduleNewPairsReconnect = (reason: string, subscriptionVersion: number) => {
+    if (
+      subscriptionVersion !== newPairsSubscriptionVersion ||
+      newPairsReconnectTimer ||
+      updateCoordinator.isClosed()
+    ) {
+      return;
+    }
+
+    console.warn(`${reason}; reconnecting newPairs in ${STREAM_RECONNECT_DELAY_MS}ms.`);
+    newPairsReconnectTimer = setTimeout(() => {
+      newPairsReconnectTimer = null;
+      if (subscriptionVersion !== newPairsSubscriptionVersion || updateCoordinator.isClosed()) {
         return;
       }
-      autonomousAnalyst.consider(result);
-      console.log(
-        `[newPairs] ${result.pairAddress} -> ${result.verdict.toUpperCase()} (${result.score})`,
-      );
-    },
-    error: (error) => {
-      console.error("newPairs subscription error", error);
-    },
-    complete: () => {
-      console.warn("newPairs subscription completed");
-    },
-  });
+      subscribeNewPairsStream();
+    }, STREAM_RECONNECT_DELAY_MS);
+  };
+
+  const startNewPairsIdleWatchdog = (subscriptionVersion: number) => {
+    if (newPairsIdleWatchdogTimer) {
+      clearInterval(newPairsIdleWatchdogTimer);
+    }
+
+    const checkIntervalMs = Math.min(
+      Math.max(Math.floor(STREAM_IDLE_RECONNECT_MS / 2), 30_000),
+      60_000,
+    );
+    newPairsIdleWatchdogTimer = setInterval(() => {
+      if (subscriptionVersion !== newPairsSubscriptionVersion || updateCoordinator.isClosed()) {
+        return;
+      }
+
+      const idleMs = Date.now() - lastNewPairEventAt;
+      if (idleMs >= STREAM_IDLE_RECONNECT_MS) {
+        scheduleNewPairsReconnect(
+          `newPairs has been idle for ${Math.round(idleMs / 1000)}s`,
+          subscriptionVersion,
+        );
+      }
+    }, checkIntervalMs);
+  };
+
+  const subscribeNewPairsStream = () => {
+    if (newPairsReconnectTimer) {
+      clearTimeout(newPairsReconnectTimer);
+      newPairsReconnectTimer = null;
+    }
+
+    const subscriptionVersion = newPairsSubscriptionVersion + 1;
+    newPairsSubscriptionVersion = subscriptionVersion;
+    lastNewPairEventAt = Date.now();
+    disposeNewPairs();
+
+    console.log("Subscribing to newPairs discovery stream.");
+    startNewPairsIdleWatchdog(subscriptionVersion);
+
+    disposeNewPairs = subscribeToNewPairs(client, config, {
+      next: async (event) => {
+        lastNewPairEventAt = Date.now();
+        const result = await runSerial(() => upsertLaunchFromNewPair(event));
+
+        updateCoordinator.track(result.pairAddress);
+        if (event.base_token?.contract_address) {
+          updateCoordinator.trackTokenForCandles(event.base_token.contract_address);
+        }
+        if ((event.quote_rate_usd ?? 0) > 0 || (event.liquidity ?? 0) > 0) {
+          updateCoordinator.trackForCandles(result.pairAddress);
+        }
+        if (result.duplicate) {
+          return;
+        }
+        autonomousAnalyst.consider(result);
+        console.log(
+          `[newPairs] ${result.pairAddress} -> ${result.verdict.toUpperCase()} (${result.score})`,
+        );
+      },
+      error: (error) => {
+        console.error("newPairs subscription error", error);
+        scheduleNewPairsReconnect("newPairs subscription error", subscriptionVersion);
+      },
+      complete: () => {
+        if (subscriptionVersion !== newPairsSubscriptionVersion || updateCoordinator.isClosed()) {
+          return;
+        }
+        console.warn("newPairs subscription completed");
+        scheduleNewPairsReconnect("newPairs subscription completed", subscriptionVersion);
+      },
+    });
+  };
+
+  subscribeNewPairsStream();
 
   const shutdown = () => {
     console.log("Shutting down Jaguar worker");
     clearInterval(heartbeatTimer);
+    if (newPairsReconnectTimer) {
+      clearTimeout(newPairsReconnectTimer);
+    }
+    if (newPairsIdleWatchdogTimer) {
+      clearInterval(newPairsIdleWatchdogTimer);
+    }
     disposeNewPairs();
     updateCoordinator.close();
   };
