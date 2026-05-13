@@ -4,7 +4,6 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
 
-
 type NavItem = {
   label: string;
   href: string;
@@ -106,6 +105,18 @@ const PersonasIcon = () => (
   </svg>
 );
 
+const SettingsIcon = () => (
+  <svg viewBox="0 0 24 24" fill="none">
+    <title>Settings</title>
+    <circle cx="12" cy="12" r="3.2" stroke="currentColor" strokeWidth="1.8" />
+    <path
+      d="M19 12a7.8 7.8 0 0 0-.1-1.2l2-1.5-2-3.4-2.4 1a7.3 7.3 0 0 0-2.1-1.2L14 3h-4l-.4 2.7a7.3 7.3 0 0 0-2.1 1.2l-2.4-1-2 3.4 2 1.5A7.8 7.8 0 0 0 5 12c0 .4 0 .8.1 1.2l-2 1.5 2 3.4 2.4-1a7.3 7.3 0 0 0 2.1 1.2L10 21h4l.4-2.7a7.3 7.3 0 0 0 2.1-1.2l2.4 1 2-3.4-2-1.5c.1-.4.1-.8.1-1.2Z"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinejoin="round"
+    />
+  </svg>
+);
 
 const MENU: NavItem[] = [
   { label: "Dashboard", href: "/dashboard", icon: <DashboardIcon /> },
@@ -114,8 +125,8 @@ const MENU: NavItem[] = [
   { label: "Alerts", href: "/alerts", icon: <AlertsIcon /> },
   { label: "Scorecard", href: "/scorecard", icon: <ScorecardIcon /> },
   { label: "Personas", href: "/personas", icon: <PersonasIcon /> },
+  { label: "Settings", href: "/settings", icon: <SettingsIcon /> },
 ];
-
 
 export function Sidebar() {
   const pathname = usePathname();

@@ -3861,3 +3861,213 @@ export async function getWalletHoldingSignals(
     })),
   }));
 }
+
+export type PersonalAlertPreference = {
+  id: string;
+  channel: string;
+  enabled: boolean;
+  personas: Persona[];
+  verdicts: Verdict[];
+  minimumScore: number;
+  minimumLiquidity: number | null;
+  protocols: string[];
+  maxAlertsPerHour: number;
+  quietHours: string | null;
+  updatedAt: string;
+};
+
+export type TelegramConnectionRecord = {
+  id: string;
+  chatId: string;
+  username: string | null;
+  firstName: string | null;
+  status: string;
+  connectedAt: string;
+  disconnectedAt: string | null;
+};
+
+export type PersonalAlertProfile = {
+  userProfileId: string;
+  walletAddress: string;
+  displayName: string | null;
+  telegram: TelegramConnectionRecord | null;
+  preference: PersonalAlertPreference;
+};
+
+const parsePersonaArray = (value: string | null | undefined): Persona[] => {
+  const allowed = new Set(PERSONAS);
+  const parsed = parseJsonArray(value).filter((item): item is Persona =>
+    allowed.has(item as Persona),
+  );
+
+  return parsed.length > 0 ? parsed : ["momentum"];
+};
+
+const parseVerdictArray = (value: string | null | undefined): Verdict[] => {
+  const allowed = new Set<Verdict>(["watch", "enter"]);
+  const parsed = parseJsonArray(value).filter((item): item is Verdict =>
+    allowed.has(item as Verdict),
+  );
+
+  return parsed.length > 0 ? parsed : ["enter"];
+};
+
+const parseProtocolArray = (value: string | null | undefined): string[] => parseJsonArray(value);
+
+const toPersonalAlertPreference = (
+  preference: Prisma.AlertPreferenceGetPayload<Record<string, never>>,
+): PersonalAlertPreference => ({
+  id: preference.id,
+  channel: preference.channel,
+  enabled: preference.enabled,
+  personas: parsePersonaArray(preference.personasJson),
+  verdicts: parseVerdictArray(preference.verdictsJson),
+  minimumScore: preference.minimumScore,
+  minimumLiquidity: preference.minimumLiquidity,
+  protocols: parseProtocolArray(preference.protocolsJson),
+  maxAlertsPerHour: preference.maxAlertsPerHour,
+  quietHours: preference.quietHoursJson,
+  updatedAt: preference.updatedAt.toISOString(),
+});
+
+const toTelegramConnectionRecord = (
+  connection: Prisma.TelegramConnectionGetPayload<Record<string, never>>,
+): TelegramConnectionRecord => ({
+  id: connection.id,
+  chatId: connection.chatId,
+  username: connection.username,
+  firstName: connection.firstName,
+  status: connection.status,
+  connectedAt: connection.connectedAt.toISOString(),
+  disconnectedAt: connection.disconnectedAt?.toISOString() ?? null,
+});
+
+export const getOrCreatePersonalAlertProfile = async (
+  walletAddress: string,
+): Promise<PersonalAlertProfile> => {
+  const normalizedWallet = walletAddress.trim();
+  if (!normalizedWallet) {
+    throw new Error("walletAddress is required to load a personal alert profile.");
+  }
+
+  const profile = await prisma.userProfile.upsert({
+    where: {
+      walletAddress: normalizedWallet,
+    },
+    update: {},
+    create: {
+      walletAddress: normalizedWallet,
+      alertPreferences: {
+        create: {
+          channel: "telegram",
+          enabled: true,
+          personasJson: JSON.stringify(["momentum"]),
+          verdictsJson: JSON.stringify(["enter"]),
+          minimumScore: 60,
+          maxAlertsPerHour: 6,
+        },
+      },
+    },
+    include: {
+      telegramConnections: {
+        where: {
+          status: "connected",
+        },
+        orderBy: {
+          connectedAt: "desc",
+        },
+        take: 1,
+      },
+      alertPreferences: {
+        where: {
+          channel: "telegram",
+        },
+        orderBy: {
+          updatedAt: "desc",
+        },
+        take: 1,
+      },
+    },
+  });
+
+  const preference =
+    profile.alertPreferences[0] ??
+    (await prisma.alertPreference.create({
+      data: {
+        userProfileId: profile.id,
+        channel: "telegram",
+        enabled: true,
+        personasJson: JSON.stringify(["momentum"]),
+        verdictsJson: JSON.stringify(["enter"]),
+        minimumScore: 60,
+        maxAlertsPerHour: 6,
+      },
+    }));
+
+  return {
+    userProfileId: profile.id,
+    walletAddress: profile.walletAddress,
+    displayName: profile.displayName,
+    telegram: profile.telegramConnections[0]
+      ? toTelegramConnectionRecord(profile.telegramConnections[0])
+      : null,
+    preference: toPersonalAlertPreference(preference),
+  };
+};
+
+export const updatePersonalAlertPreference = async ({
+  userProfileId,
+  enabled,
+  personas,
+  verdicts,
+  minimumScore,
+  minimumLiquidity,
+  protocols,
+  maxAlertsPerHour,
+}: {
+  userProfileId: string;
+  enabled: boolean;
+  personas: Persona[];
+  verdicts: Verdict[];
+  minimumScore: number;
+  minimumLiquidity: number | null;
+  protocols: string[];
+  maxAlertsPerHour: number;
+}): Promise<PersonalAlertPreference> => {
+  const existing = await prisma.alertPreference.findFirst({
+    where: {
+      userProfileId,
+      channel: "telegram",
+    },
+    orderBy: {
+      updatedAt: "desc",
+    },
+  });
+
+  const data = {
+    enabled,
+    personasJson: JSON.stringify(personas.length > 0 ? personas : ["momentum"]),
+    verdictsJson: JSON.stringify(verdicts.length > 0 ? verdicts : ["enter"]),
+    minimumScore: Math.min(100, Math.max(0, Math.round(minimumScore))),
+    minimumLiquidity,
+    protocolsJson: protocols.length > 0 ? JSON.stringify(protocols) : null,
+    maxAlertsPerHour: Math.min(60, Math.max(1, Math.round(maxAlertsPerHour))),
+  };
+
+  const preference = existing
+    ? await prisma.alertPreference.update({
+        where: {
+          id: existing.id,
+        },
+        data,
+      })
+    : await prisma.alertPreference.create({
+        data: {
+          userProfileId,
+          channel: "telegram",
+          ...data,
+        },
+      });
+
+  return toPersonalAlertPreference(preference);
+};

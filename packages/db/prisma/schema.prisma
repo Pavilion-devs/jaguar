@@ -72,6 +72,7 @@ model Launch {
   recommendations   Recommendation[]
   alerts            Alert[]
   memos             LaunchMemo[]
+  alertDeliveries   AlertDelivery[]
 }
 
 model LaunchEvent {
@@ -222,8 +223,73 @@ model Alert {
   deliveredTo String?
   createdAt   DateTime @default(now())
   launch      Launch   @relation(fields: [launchId], references: [id], onDelete: Cascade)
+  deliveries  AlertDelivery[]
 
   @@index([launchId, createdAt])
+}
+
+model UserProfile {
+  id                  String               @id @default(cuid())
+  walletAddress       String               @unique
+  displayName         String?
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+  telegramConnections TelegramConnection[]
+  alertPreferences    AlertPreference[]
+  alertDeliveries     AlertDelivery[]
+}
+
+model TelegramConnection {
+  id              String      @id @default(cuid())
+  userProfileId   String
+  chatId          String      @unique
+  username        String?
+  firstName       String?
+  status          String      @default("connected")
+  connectedAt     DateTime    @default(now())
+  disconnectedAt  DateTime?
+  userProfile     UserProfile @relation(fields: [userProfileId], references: [id], onDelete: Cascade)
+
+  @@index([userProfileId, status])
+}
+
+model AlertPreference {
+  id                String      @id @default(cuid())
+  userProfileId     String
+  channel           String      @default("telegram")
+  enabled           Boolean     @default(true)
+  personasJson      String      @default("[\"momentum\"]")
+  verdictsJson      String      @default("[\"enter\"]")
+  minimumScore      Int         @default(60)
+  minimumLiquidity  Float?
+  protocolsJson     String?
+  maxAlertsPerHour  Int         @default(6)
+  quietHoursJson    String?
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime    @updatedAt
+  userProfile       UserProfile @relation(fields: [userProfileId], references: [id], onDelete: Cascade)
+
+  @@index([userProfileId, channel, enabled])
+}
+
+model AlertDelivery {
+  id             String      @id @default(cuid())
+  alertId        String
+  launchId       String
+  userProfileId  String
+  channel        String
+  destination    String
+  status         String      @default("pending")
+  errorMessage   String?
+  deliveredAt    DateTime?
+  createdAt      DateTime    @default(now())
+  alert          Alert       @relation(fields: [alertId], references: [id], onDelete: Cascade)
+  launch         Launch      @relation(fields: [launchId], references: [id], onDelete: Cascade)
+  userProfile    UserProfile @relation(fields: [userProfileId], references: [id], onDelete: Cascade)
+
+  @@unique([alertId, userProfileId, channel, destination])
+  @@index([userProfileId, createdAt])
+  @@index([channel, status, createdAt])
 }
 
 model LaunchMemo {
