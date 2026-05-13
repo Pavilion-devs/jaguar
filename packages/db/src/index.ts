@@ -20,7 +20,7 @@ import type {
   ScoredLaunch,
   Verdict,
 } from "@jaguar/domain";
-import { ALERT_TYPES } from "@jaguar/domain";
+import { ALERT_TYPES, PERSONAS, REASON_CODES } from "@jaguar/domain";
 import { scoreLaunch, scoreLaunchBoard } from "@jaguar/scoring";
 import { PrismaPg } from "@prisma/adapter-pg";
 import {
@@ -441,6 +441,13 @@ const parseJsonArray = (value: string | null | undefined): string[] => {
   } catch {
     return [];
   }
+};
+
+const parseReasonCodes = (value: string | null | undefined): ReasonCode[] => {
+  const allowed = new Set(REASON_CODES);
+  return parseJsonArray(value).filter((item): item is ReasonCode =>
+    allowed.has(item as ReasonCode),
+  );
 };
 
 const toRecommendation = (recommendation: RecommendationWithOutcomes): Recommendation => {
@@ -992,6 +999,161 @@ export type IngestionApplyResult = {
   verdict: Verdict;
   duplicate: boolean;
   analystTriggers: AnalystTrigger[];
+};
+
+export type TelegramEnterAlert = {
+  alertId: string;
+  launchId: string;
+  pairAddress: string;
+  tokenSymbol: string;
+  tokenName: string;
+  protocol: string;
+  persona: Persona;
+  score: number;
+  priceAtEntryUsd: number | null;
+  liquidityUsd: number;
+  marketCapUsd: number;
+  reasons: ReasonCode[];
+  createdAt: string;
+};
+
+const parseTelegramEnterPayload = (payloadJson: string | null) => {
+  if (!payloadJson) return null;
+
+  try {
+    const parsed = JSON.parse(payloadJson) as {
+      persona?: string;
+      verdict?: string;
+      score?: number;
+      priceAtEntry?: number;
+    };
+
+    if (!PERSONAS.includes(parsed.persona as Persona) || parsed.verdict !== "enter") {
+      return null;
+    }
+
+    return {
+      persona: parsed.persona as Persona,
+      score: typeof parsed.score === "number" ? parsed.score : 0,
+      priceAtEntry: typeof parsed.priceAtEntry === "number" ? parsed.priceAtEntry : null,
+    };
+  } catch {
+    return null;
+  }
+};
+
+const deliveryMarker = (channel: string, destination: string) =>
+  `${channel}:${destination}`.replaceAll(",", "_");
+
+export const listPendingTelegramEnterAlerts = async ({
+  limit = 10,
+  personas = ["momentum"],
+  since = new Date(Date.now() - 60 * 60_000),
+  destination,
+}: {
+  limit?: number;
+  personas?: Persona[];
+  since?: Date;
+  destination: string;
+}): Promise<TelegramEnterAlert[]> => {
+  const marker = deliveryMarker("telegram", destination);
+  const allowedPersonas = new Set(personas);
+  const alerts = await prisma.alert.findMany({
+    where: {
+      alertType: "paper-trade-opened",
+      createdAt: {
+        gte: since,
+      },
+      OR: [
+        {
+          deliveredTo: null,
+        },
+        {
+          NOT: {
+            deliveredTo: {
+              contains: marker,
+            },
+          },
+        },
+      ],
+    },
+    orderBy: {
+      createdAt: "asc",
+    },
+    take: Math.max(limit * 20, 100),
+    include: {
+      launch: {
+        select: {
+          id: true,
+          pairAddress: true,
+          baseTokenSymbol: true,
+          baseTokenName: true,
+          protocol: true,
+          state: true,
+        },
+      },
+    },
+  });
+
+  return alerts
+    .map((alert): TelegramEnterAlert | null => {
+      const payload = parseTelegramEnterPayload(alert.payloadJson);
+      if (!payload || !allowedPersonas.has(payload.persona)) return null;
+
+      return {
+        alertId: alert.id,
+        launchId: alert.launchId,
+        pairAddress: alert.launch.pairAddress,
+        tokenSymbol: alert.launch.baseTokenSymbol,
+        tokenName: alert.launch.baseTokenName ?? alert.launch.baseTokenSymbol,
+        protocol: alert.launch.protocol,
+        persona: payload.persona,
+        score: payload.score,
+        priceAtEntryUsd: payload.priceAtEntry,
+        liquidityUsd: alert.launch.state?.currentLiquidityUsd ?? 0,
+        marketCapUsd: alert.launch.state?.currentMarketCapUsd ?? 0,
+        reasons: parseReasonCodes(alert.launch.state?.reasonCodesJson),
+        createdAt: alert.createdAt.toISOString(),
+      };
+    })
+    .filter((alert): alert is TelegramEnterAlert => alert !== null)
+    .slice(0, limit);
+};
+
+export const markAlertDelivered = async ({
+  alertId,
+  channel,
+  destination,
+}: {
+  alertId: string;
+  channel: string;
+  destination: string;
+}) => {
+  const marker = deliveryMarker(channel, destination);
+  const alert = await prisma.alert.findUnique({
+    where: {
+      id: alertId,
+    },
+    select: {
+      deliveredTo: true,
+    },
+  });
+
+  if (!alert) return;
+
+  const deliveredTo = alert.deliveredTo ?? "";
+  if (deliveredTo.split(",").includes(marker)) {
+    return;
+  }
+
+  await prisma.alert.update({
+    where: {
+      id: alertId,
+    },
+    data: {
+      deliveredTo: deliveredTo ? `${deliveredTo},${marker}` : marker,
+    },
+  });
 };
 
 const timelineEntriesToAnalystTriggers = (entries: TransitionTimelineEntry[]): AnalystTrigger[] => {

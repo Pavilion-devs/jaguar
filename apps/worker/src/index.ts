@@ -1,6 +1,7 @@
 import { generateLaunchMemo } from "@jaguar/agent";
 import {
   type IngestionApplyResult,
+  type TelegramEnterAlert,
   applyLaunchUpdate,
   applyPairOhlcvCandle,
   applyTokenOhlcvCandle,
@@ -8,11 +9,14 @@ import {
   getLaunchDetail,
   listOhlcvCandidatePairAddresses,
   listOhlcvCandidateTokenAddresses,
+  listPendingTelegramEnterAlerts,
   listTrackedPairAddresses,
+  markAlertDelivered,
   saveAgentMemo,
   upsertLaunchFromNewPair,
   upsertWorkerHeartbeat,
 } from "@jaguar/db";
+import { PERSONAS, type Persona } from "@jaguar/domain";
 import {
   createGoldRushClient,
   subscribeToNewPairs,
@@ -33,6 +37,43 @@ const STREAM_IDLE_RECONNECT_MS = 10 * 60_000;
 const ANALYST_COOLDOWN_MS = 10 * 60_000;
 const ANALYST_STALE_SCORE_DRIFT = 8;
 const MAX_ANALYST_QUEUE = 25;
+const parsePositiveNumber = (value: string | undefined, fallback: number) => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+};
+
+const TELEGRAM_ALERT_POLL_MS = parsePositiveNumber(process.env.TELEGRAM_ALERT_POLL_MS, 15_000);
+const TELEGRAM_ALERT_LOOKBACK_MINUTES = parsePositiveNumber(
+  process.env.TELEGRAM_ALERT_LOOKBACK_MINUTES,
+  60,
+);
+
+const usdFormatter = new Intl.NumberFormat("en-US", {
+  style: "currency",
+  currency: "USD",
+  notation: "compact",
+  maximumFractionDigits: 2,
+});
+
+const formatUsd = (value: number | null | undefined) => usdFormatter.format(value ?? 0);
+
+const parseTelegramPersonas = (rawValue: string | undefined): Persona[] => {
+  if (!rawValue) {
+    return ["momentum"];
+  }
+
+  if (rawValue.trim().toLowerCase() === "all") {
+    return [...PERSONAS];
+  }
+
+  const allowed = new Set(PERSONAS);
+  const parsed = rawValue
+    .split(",")
+    .map((value) => value.trim())
+    .filter((value): value is Persona => allowed.has(value as Persona));
+
+  return parsed.length > 0 ? parsed : ["momentum"];
+};
 
 const createSerialExecutor = () => {
   let current = Promise.resolve();
@@ -159,6 +200,137 @@ class AutonomousAnalyst {
   }
 }
 
+class TelegramEnterNotifier {
+  private readonly botToken = process.env.TELEGRAM_BOT_TOKEN ?? "";
+  private readonly chatId = process.env.TELEGRAM_CHAT_ID ?? "";
+  private readonly appUrl =
+    process.env.JAGUAR_PUBLIC_URL ??
+    process.env.NEXT_PUBLIC_APP_URL ??
+    "https://www.jaguaralpha.xyz";
+  private readonly personas = parseTelegramPersonas(process.env.TELEGRAM_ALERT_PERSONAS);
+  private timer: NodeJS.Timeout | null = null;
+  private isDraining = false;
+
+  get enabled() {
+    return Boolean(this.botToken && this.chatId);
+  }
+
+  start() {
+    if (!this.enabled) {
+      console.log(
+        "Telegram enter alerts disabled. Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID to enable.",
+      );
+      return;
+    }
+
+    console.log(`Telegram enter alerts enabled for personas: ${this.personas.join(", ")}`);
+    this.timer = setInterval(
+      () => {
+        void this.drain();
+      },
+      Math.max(5_000, TELEGRAM_ALERT_POLL_MS),
+    );
+    void this.drain();
+  }
+
+  consider(result: IngestionApplyResult) {
+    if (
+      !this.enabled ||
+      result.duplicate ||
+      !result.analystTriggers.some((trigger) =>
+        ["paper-trade-opened", "verdict-enter"].includes(trigger),
+      )
+    ) {
+      return;
+    }
+
+    void this.drain();
+  }
+
+  close() {
+    if (this.timer) {
+      clearInterval(this.timer);
+      this.timer = null;
+    }
+  }
+
+  private async drain() {
+    if (this.isDraining || !this.enabled) {
+      return;
+    }
+
+    this.isDraining = true;
+
+    try {
+      const since = new Date(Date.now() - TELEGRAM_ALERT_LOOKBACK_MINUTES * 60_000);
+      const alerts = await listPendingTelegramEnterAlerts({
+        limit: 10,
+        personas: this.personas,
+        since,
+        destination: this.chatId,
+      });
+
+      for (const alert of alerts) {
+        await this.send(alert);
+        await markAlertDelivered({
+          alertId: alert.alertId,
+          channel: "telegram",
+          destination: this.chatId,
+        });
+      }
+    } catch (error) {
+      console.error(
+        "Telegram enter alert drain failed",
+        error instanceof Error ? error.message : error,
+      );
+    } finally {
+      this.isDraining = false;
+    }
+  }
+
+  private async send(alert: TelegramEnterAlert) {
+    const response = await fetch(`https://api.telegram.org/bot${this.botToken}/sendMessage`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        chat_id: this.chatId,
+        text: this.formatMessage(alert),
+        disable_web_page_preview: false,
+      }),
+    });
+
+    if (!response.ok) {
+      const body = await response.text();
+      throw new Error(`Telegram sendMessage failed with ${response.status}: ${body}`);
+    }
+
+    console.log(
+      `[telegram] enter alert delivered for ${alert.pairAddress} (${alert.persona}, score ${alert.score})`,
+    );
+  }
+
+  private formatMessage(alert: TelegramEnterAlert) {
+    const launchUrl = `${this.appUrl.replace(/\/$/, "")}/launches/${alert.launchId}`;
+    const reasons = alert.reasons.length > 0 ? alert.reasons.join(", ") : "live flow confirmed";
+
+    return [
+      `Jaguar ENTER: ${alert.tokenSymbol}`,
+      `${alert.tokenName} on ${alert.protocol}`,
+      "",
+      `Persona: ${alert.persona}`,
+      `Score: ${alert.score}`,
+      `Entry: ${alert.priceAtEntryUsd ? formatUsd(alert.priceAtEntryUsd) : "live market"}`,
+      `Liquidity: ${formatUsd(alert.liquidityUsd)}`,
+      `Market cap: ${formatUsd(alert.marketCapUsd)}`,
+      `Reasons: ${reasons}`,
+      "",
+      launchUrl,
+    ].join("\n");
+  }
+}
+
 class UpdateStreamCoordinator {
   private trackedPairAddresses: string[] = [];
   private candlePairAddresses: string[] = [];
@@ -179,6 +351,7 @@ class UpdateStreamCoordinator {
     private readonly chainName: "SOLANA_MAINNET",
     private readonly runSerial: <T>(task: () => Promise<T>) => Promise<T>,
     private readonly autonomousAnalyst: AutonomousAnalyst,
+    private readonly telegramNotifier: TelegramEnterNotifier,
   ) {}
 
   async seedFromDatabase() {
@@ -408,6 +581,7 @@ class UpdateStreamCoordinator {
           }
 
           this.autonomousAnalyst.consider(result);
+          this.telegramNotifier.consider(result);
 
           console.log(
             `[updatePairs] ${event.pair_address} -> ${result.verdict.toUpperCase()} (${result.score})`,
@@ -451,6 +625,7 @@ class UpdateStreamCoordinator {
             }
 
             this.autonomousAnalyst.consider(result);
+            this.telegramNotifier.consider(result);
 
             console.log(
               `[ohlcvCandlesForPair] ${event.pair_address} -> ${result.verdict.toUpperCase()} (${result.score})`,
@@ -502,6 +677,7 @@ class UpdateStreamCoordinator {
             }
 
             this.autonomousAnalyst.consider(result);
+            this.telegramNotifier.consider(result);
 
             console.log(
               `[ohlcvCandlesForToken] ${result.pairAddress} -> ${result.verdict.toUpperCase()} (${result.score})`,
@@ -566,16 +742,19 @@ const main = async () => {
   const client = createGoldRushClient(config);
   const runSerial = createSerialExecutor();
   const autonomousAnalyst = new AutonomousAnalyst();
+  const telegramNotifier = new TelegramEnterNotifier();
   const updateCoordinator = new UpdateStreamCoordinator(
     client,
     config.chainName,
     runSerial,
     autonomousAnalyst,
+    telegramNotifier,
   );
   const workerStartedAt = new Date();
   const workerKey = `jaguar-worker-${config.chainName.toLowerCase()}`;
 
   await updateCoordinator.seedFromDatabase();
+  telegramNotifier.start();
 
   const persistHeartbeat = async () => {
     const snapshot = updateCoordinator.snapshot();
@@ -681,6 +860,7 @@ const main = async () => {
           return;
         }
         autonomousAnalyst.consider(result);
+        telegramNotifier.consider(result);
         console.log(
           `[newPairs] ${result.pairAddress} -> ${result.verdict.toUpperCase()} (${result.score})`,
         );
@@ -712,6 +892,7 @@ const main = async () => {
     }
     disposeNewPairs();
     updateCoordinator.close();
+    telegramNotifier.close();
   };
 
   process.on("SIGINT", shutdown);
