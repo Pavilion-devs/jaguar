@@ -1329,11 +1329,86 @@ export const listOhlcvCandidateTokenAddresses = async (limit = 12) => {
 };
 
 export const listLaunchBoard = async (limit = 25, persona: Persona = "momentum") => {
-  const launches = await prisma.launch.findMany({
-    include: launchWithStateInclude,
-    orderBy: [{ firstSeenAt: "desc" }],
-    take: Math.max(limit * 2, limit),
-  });
+  const recentTake = Math.max(limit * 3, 120);
+  const signalTake = Math.max(limit * 4, 160);
+  const signalSince = new Date(Date.now() - 6 * 60 * 60_000);
+  const [recentLaunches, signalLaunches] = await Promise.all([
+    prisma.launch.findMany({
+      include: launchWithStateInclude,
+      orderBy: [{ firstSeenAt: "desc" }],
+      take: recentTake,
+    }),
+    prisma.launch.findMany({
+      where: {
+        currentStatus: {
+          not: "archived",
+        },
+        state: {
+          is: {
+            AND: [
+              {
+                lastEventAt: {
+                  gte: signalSince,
+                },
+              },
+              {
+                OR: [
+                  {
+                    scoreGlobal: {
+                      gt: 0,
+                    },
+                  },
+                  {
+                    currentLiquidityUsd: {
+                      gt: 0,
+                    },
+                  },
+                  {
+                    currentVolume1mUsd: {
+                      gt: 0,
+                    },
+                  },
+                  {
+                    currentVolume5mUsd: {
+                      gt: 0,
+                    },
+                  },
+                  {
+                    currentVolume15mUsd: {
+                      gt: 0,
+                    },
+                  },
+                  {
+                    currentVolume1hUsd: {
+                      gt: 0,
+                    },
+                  },
+                  {
+                    currentSwapCount5m: {
+                      gt: 0,
+                    },
+                  },
+                  {
+                    currentSwapCount1h: {
+                      gt: 0,
+                    },
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      },
+      include: launchWithStateInclude,
+      orderBy: [{ state: { scoreGlobal: "desc" } }, { state: { lastEventAt: "desc" } }],
+      take: signalTake,
+    }),
+  ]);
+  const launches = [
+    ...new Map(
+      [...signalLaunches, ...recentLaunches].map((launch) => [launch.id, launch]),
+    ).values(),
+  ];
 
   return scoreLaunchBoard(launches.map(toSnapshot), persona).slice(0, limit);
 };
