@@ -39,20 +39,33 @@ export default async function SettingsPage() {
 
           <div className="telegram-connect-box">
             <div>
-              <span className="settings-label">Connect link</span>
+              <span className="settings-label">
+                {profile.telegram ? "Connected bot" : "Connect link"}
+              </span>
               <strong>Jaguarxyz_bot</strong>
-              <p>
-                Open this link in Telegram and press Start. Jaguar will link that Telegram chat to
-                this alert profile.
-              </p>
+              {profile.telegram ? (
+                <p>
+                  This Telegram chat is linked to your alert profile. Use reconnect only if you want
+                  to move alerts to another chat.
+                </p>
+              ) : (
+                <p>
+                  Open this link in Telegram and press Start. Jaguar will link that Telegram chat to
+                  this alert profile.
+                </p>
+              )}
             </div>
             <a
               href={telegramDeepLink}
-              className="settings-primary-action"
+              className={
+                profile.telegram
+                  ? "settings-primary-action settings-secondary-action"
+                  : "settings-primary-action"
+              }
               target="_blank"
               rel="noreferrer"
             >
-              Connect Telegram
+              {profile.telegram ? "Reconnect" : "Connect Telegram"}
             </a>
           </div>
 

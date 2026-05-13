@@ -2550,6 +2550,13 @@
     box-shadow: 0 12px 28px rgba(47, 107, 71, 0.18);
   }
 
+  & .settings-secondary-action {
+    border: 1px solid var(--line);
+    background: #fff;
+    color: var(--green);
+    box-shadow: none;
+  }
+
   & .settings-note {
     border-radius: 14px;
     background: #fff8e9;
