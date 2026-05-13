@@ -3886,6 +3886,13 @@ export type TelegramConnectionRecord = {
   disconnectedAt: string | null;
 };
 
+export type TelegramConnectInput = {
+  userProfileId: string;
+  chatId: string;
+  username?: string | null;
+  firstName?: string | null;
+};
+
 export type PersonalAlertProfile = {
   userProfileId: string;
   walletAddress: string;
@@ -4070,4 +4077,48 @@ export const updatePersonalAlertPreference = async ({
       });
 
   return toPersonalAlertPreference(preference);
+};
+
+export const connectTelegramChatToProfile = async ({
+  userProfileId,
+  chatId,
+  username,
+  firstName,
+}: TelegramConnectInput): Promise<TelegramConnectionRecord> => {
+  const normalizedChatId = chatId.trim();
+  if (!userProfileId || !normalizedChatId) {
+    throw new Error("userProfileId and chatId are required to connect Telegram.");
+  }
+
+  await prisma.userProfile.findUniqueOrThrow({
+    where: {
+      id: userProfileId,
+    },
+    select: {
+      id: true,
+    },
+  });
+
+  const connection = await prisma.telegramConnection.upsert({
+    where: {
+      chatId: normalizedChatId,
+    },
+    update: {
+      userProfileId,
+      username: username ?? null,
+      firstName: firstName ?? null,
+      status: "connected",
+      connectedAt: new Date(),
+      disconnectedAt: null,
+    },
+    create: {
+      userProfileId,
+      chatId: normalizedChatId,
+      username: username ?? null,
+      firstName: firstName ?? null,
+      status: "connected",
+    },
+  });
+
+  return toTelegramConnectionRecord(connection);
 };

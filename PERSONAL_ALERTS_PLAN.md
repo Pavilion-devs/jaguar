@@ -49,6 +49,8 @@ Add a dashboard settings experience:
 - Jaguar links the Telegram chat to the user's profile.
 - UI shows connected state and a disconnect option.
 
+Telegram start payloads are size-limited, so Jaguar should use compact signed tokens rather than long JWTs. The token should contain the profile id, an expiry timestamp, and a truncated HMAC signature.
+
 ### 3. Per-User Alert Fanout
 
 Move from one global Telegram destination to user-specific fanout:
@@ -145,4 +147,3 @@ Start with:
 2. DB helpers for creating connect tokens and resolving Telegram connections.
 3. Web settings page shell for alert preferences.
 4. Telegram webhook route for `/start connect_<token>`.
-

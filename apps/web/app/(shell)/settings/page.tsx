@@ -1,5 +1,7 @@
 import { getOrCreatePersonalAlertProfile } from "@jaguar/db";
 
+import { createTelegramConnectToken } from "@/lib/telegram-connect";
+
 const DEMO_WALLET_ADDRESS = "jaguar-demo-wallet";
 
 const formatPersona = (persona: string) =>
@@ -9,7 +11,8 @@ const formatPersona = (persona: string) =>
 
 export default async function SettingsPage() {
   const profile = await getOrCreatePersonalAlertProfile(DEMO_WALLET_ADDRESS);
-  const telegramDeepLink = `https://t.me/Jaguarxyz_bot?start=connect_${profile.userProfileId}`;
+  const connectToken = createTelegramConnectToken(profile.userProfileId);
+  const telegramDeepLink = `https://t.me/Jaguarxyz_bot?start=connect_${connectToken}`;
 
   return (
     <>
