@@ -1017,6 +1017,12 @@ export type TelegramEnterAlert = {
   createdAt: string;
 };
 
+export type PersonalTelegramEnterAlert = TelegramEnterAlert & {
+  userProfileId: string;
+  walletAddress: string;
+  destination: string;
+};
+
 const parseTelegramEnterPayload = (payloadJson: string | null) => {
   if (!payloadJson) return null;
 
@@ -1152,6 +1158,201 @@ export const markAlertDelivered = async ({
     },
     data: {
       deliveredTo: deliveredTo ? `${deliveredTo},${marker}` : marker,
+    },
+  });
+};
+
+const matchesPersonalAlertPreference = ({
+  alert,
+  preference,
+}: {
+  alert: TelegramEnterAlert;
+  preference: PersonalAlertPreference;
+}) => {
+  if (!preference.enabled) return false;
+  if (!preference.personas.includes(alert.persona)) return false;
+  if (!preference.verdicts.includes("enter")) return false;
+  if (alert.score < preference.minimumScore) return false;
+
+  if (preference.minimumLiquidity !== null && alert.liquidityUsd < preference.minimumLiquidity) {
+    return false;
+  }
+
+  if (preference.protocols.length > 0) {
+    const allowedProtocols = new Set(
+      preference.protocols.map((protocol) => protocol.trim().toLowerCase()),
+    );
+    if (!allowedProtocols.has(alert.protocol.trim().toLowerCase())) {
+      return false;
+    }
+  }
+
+  return true;
+};
+
+export const listPendingPersonalTelegramEnterAlerts = async ({
+  limit = 25,
+  since = new Date(Date.now() - 60 * 60_000),
+}: {
+  limit?: number;
+  since?: Date;
+} = {}): Promise<PersonalTelegramEnterAlert[]> => {
+  const alertCandidates = await listPendingTelegramEnterAlerts({
+    limit: Math.max(limit * 5, 50),
+    personas: [...PERSONAS],
+    since,
+    destination: "__personal-alerts__",
+  });
+
+  if (alertCandidates.length === 0) {
+    return [];
+  }
+
+  const profiles = await prisma.userProfile.findMany({
+    where: {
+      telegramConnections: {
+        some: {
+          status: "connected",
+        },
+      },
+      alertPreferences: {
+        some: {
+          channel: "telegram",
+          enabled: true,
+        },
+      },
+    },
+    include: {
+      telegramConnections: {
+        where: {
+          status: "connected",
+        },
+        orderBy: {
+          connectedAt: "desc",
+        },
+        take: 1,
+      },
+      alertPreferences: {
+        where: {
+          channel: "telegram",
+          enabled: true,
+        },
+        orderBy: {
+          updatedAt: "desc",
+        },
+        take: 1,
+      },
+      alertDeliveries: {
+        where: {
+          channel: "telegram",
+          createdAt: {
+            gte: new Date(Date.now() - 60 * 60_000),
+          },
+        },
+        select: {
+          alertId: true,
+          destination: true,
+          status: true,
+        },
+      },
+    },
+  });
+
+  if (profiles.length === 0) {
+    return [];
+  }
+
+  const jobs: PersonalTelegramEnterAlert[] = [];
+  const deliveredCountsByProfile = new Map(
+    profiles.map((profile) => [
+      profile.id,
+      profile.alertDeliveries.filter((delivery) => delivery.status === "delivered").length,
+    ]),
+  );
+
+  for (const alert of alertCandidates) {
+    for (const profile of profiles) {
+      const connection = profile.telegramConnections[0];
+      const rawPreference = profile.alertPreferences[0];
+
+      if (!connection || !rawPreference) {
+        continue;
+      }
+
+      const preference = toPersonalAlertPreference(rawPreference);
+      const recentDeliveredCount = deliveredCountsByProfile.get(profile.id) ?? 0;
+
+      if (recentDeliveredCount >= preference.maxAlertsPerHour) {
+        continue;
+      }
+
+      const alreadyRecorded = profile.alertDeliveries.some(
+        (delivery) =>
+          delivery.alertId === alert.alertId && delivery.destination === connection.chatId,
+      );
+
+      if (alreadyRecorded || !matchesPersonalAlertPreference({ alert, preference })) {
+        continue;
+      }
+
+      jobs.push({
+        ...alert,
+        userProfileId: profile.id,
+        walletAddress: profile.walletAddress,
+        destination: connection.chatId,
+      });
+      deliveredCountsByProfile.set(profile.id, recentDeliveredCount + 1);
+
+      if (jobs.length >= limit) {
+        return jobs;
+      }
+    }
+  }
+
+  return jobs;
+};
+
+export const recordPersonalTelegramAlertDelivery = async ({
+  alertId,
+  launchId,
+  userProfileId,
+  destination,
+  status,
+  errorMessage,
+}: {
+  alertId: string;
+  launchId: string;
+  userProfileId: string;
+  destination: string;
+  status: "delivered" | "failed";
+  errorMessage?: string;
+}) => {
+  const deliveredAt = status === "delivered" ? new Date() : null;
+  const normalizedError = errorMessage ? errorMessage.slice(0, 1_000) : null;
+
+  await prisma.alertDelivery.upsert({
+    where: {
+      alertId_userProfileId_channel_destination: {
+        alertId,
+        userProfileId,
+        channel: "telegram",
+        destination,
+      },
+    },
+    update: {
+      status,
+      errorMessage: normalizedError,
+      deliveredAt,
+    },
+    create: {
+      alertId,
+      launchId,
+      userProfileId,
+      channel: "telegram",
+      destination,
+      status,
+      errorMessage: normalizedError,
+      deliveredAt,
     },
   });
 };

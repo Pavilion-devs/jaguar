@@ -138,12 +138,13 @@ Jaguar should interrupt users only when it has a clear reason.
 - Store Telegram chat ids per user.
 - Record every per-user send in `AlertDelivery`.
 - Keep the current global Telegram env delivery path until per-user delivery is stable.
+- Worker fanout is enabled with `TELEGRAM_PERSONAL_ALERTS_ENABLED=true` and uses the same bot token as the operator alert path.
 
 ## Next Implementation Slice
 
 Start with:
 
-1. Prisma models for user profiles, Telegram connections, alert preferences, and alert deliveries.
-2. DB helpers for creating connect tokens and resolving Telegram connections.
-3. Web settings page shell for alert preferences.
-4. Telegram webhook route for `/start connect_<token>`.
+1. Worker fanout from `paper-trade-opened` alerts to connected Telegram users.
+2. Delivery recording in `AlertDelivery` for every per-user success or failure.
+3. Settings controls for score, persona, verdict, protocol, liquidity, and rate limits.
+4. Real wallet identity instead of the temporary demo profile anchor.

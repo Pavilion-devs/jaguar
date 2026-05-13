@@ -1,6 +1,7 @@
 import { generateLaunchMemo } from "@jaguar/agent";
 import {
   type IngestionApplyResult,
+  type PersonalTelegramEnterAlert,
   type TelegramEnterAlert,
   applyLaunchUpdate,
   applyPairOhlcvCandle,
@@ -9,9 +10,11 @@ import {
   getLaunchDetail,
   listOhlcvCandidatePairAddresses,
   listOhlcvCandidateTokenAddresses,
+  listPendingPersonalTelegramEnterAlerts,
   listPendingTelegramEnterAlerts,
   listTrackedPairAddresses,
   markAlertDelivered,
+  recordPersonalTelegramAlertDelivery,
   saveAgentMemo,
   upsertLaunchFromNewPair,
   upsertWorkerHeartbeat,
@@ -203,6 +206,7 @@ class AutonomousAnalyst {
 class TelegramEnterNotifier {
   private readonly botToken = process.env.TELEGRAM_BOT_TOKEN ?? "";
   private readonly chatId = process.env.TELEGRAM_CHAT_ID ?? "";
+  private readonly personalAlertsEnabled = process.env.TELEGRAM_PERSONAL_ALERTS_ENABLED !== "false";
   private readonly appUrl =
     process.env.JAGUAR_PUBLIC_URL ??
     process.env.NEXT_PUBLIC_APP_URL ??
@@ -212,18 +216,22 @@ class TelegramEnterNotifier {
   private isDraining = false;
 
   get enabled() {
-    return Boolean(this.botToken && this.chatId);
+    return Boolean(this.botToken && (this.chatId || this.personalAlertsEnabled));
   }
 
   start() {
     if (!this.enabled) {
       console.log(
-        "Telegram enter alerts disabled. Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID to enable.",
+        "Telegram enter alerts disabled. Set TELEGRAM_BOT_TOKEN to enable personal alerts or TELEGRAM_CHAT_ID for operator alerts.",
       );
       return;
     }
 
-    console.log(`Telegram enter alerts enabled for personas: ${this.personas.join(", ")}`);
+    console.log(
+      `Telegram enter alerts enabled for personas: ${this.personas.join(", ")}${
+        this.personalAlertsEnabled ? " with personal fanout" : ""
+      }`,
+    );
     this.timer = setInterval(
       () => {
         void this.drain();
@@ -263,20 +271,27 @@ class TelegramEnterNotifier {
 
     try {
       const since = new Date(Date.now() - TELEGRAM_ALERT_LOOKBACK_MINUTES * 60_000);
-      const alerts = await listPendingTelegramEnterAlerts({
-        limit: 10,
-        personas: this.personas,
-        since,
-        destination: this.chatId,
-      });
 
-      for (const alert of alerts) {
-        await this.send(alert);
-        await markAlertDelivered({
-          alertId: alert.alertId,
-          channel: "telegram",
+      if (this.chatId) {
+        const alerts = await listPendingTelegramEnterAlerts({
+          limit: 10,
+          personas: this.personas,
+          since,
           destination: this.chatId,
         });
+
+        for (const alert of alerts) {
+          await this.send(this.chatId, alert, "operator");
+          await markAlertDelivered({
+            alertId: alert.alertId,
+            channel: "telegram",
+            destination: this.chatId,
+          });
+        }
+      }
+
+      if (this.personalAlertsEnabled) {
+        await this.drainPersonalAlerts(since);
       }
     } catch (error) {
       console.error(
@@ -288,14 +303,52 @@ class TelegramEnterNotifier {
     }
   }
 
-  private async send(alert: TelegramEnterAlert) {
+  private async drainPersonalAlerts(since: Date) {
+    const alerts = await listPendingPersonalTelegramEnterAlerts({
+      limit: 25,
+      since,
+    });
+
+    for (const alert of alerts) {
+      try {
+        await this.send(alert.destination, alert, "personal");
+        await recordPersonalTelegramAlertDelivery({
+          alertId: alert.alertId,
+          launchId: alert.launchId,
+          userProfileId: alert.userProfileId,
+          destination: alert.destination,
+          status: "delivered",
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        await recordPersonalTelegramAlertDelivery({
+          alertId: alert.alertId,
+          launchId: alert.launchId,
+          userProfileId: alert.userProfileId,
+          destination: alert.destination,
+          status: "failed",
+          errorMessage: message,
+        });
+        console.error(
+          `[telegram] personal enter alert failed for ${alert.pairAddress} to ${alert.walletAddress}`,
+          message,
+        );
+      }
+    }
+  }
+
+  private async send(
+    destination: string,
+    alert: TelegramEnterAlert | PersonalTelegramEnterAlert,
+    scope: "operator" | "personal",
+  ) {
     const response = await fetch(`https://api.telegram.org/bot${this.botToken}/sendMessage`, {
       method: "POST",
       headers: {
         "content-type": "application/json",
       },
       body: JSON.stringify({
-        chat_id: this.chatId,
+        chat_id: destination,
         text: this.formatMessage(alert),
         disable_web_page_preview: false,
       }),
@@ -307,7 +360,7 @@ class TelegramEnterNotifier {
     }
 
     console.log(
-      `[telegram] enter alert delivered for ${alert.pairAddress} (${alert.persona}, score ${alert.score})`,
+      `[telegram] ${scope} enter alert delivered for ${alert.pairAddress} (${alert.persona}, score ${alert.score})`,
     );
   }
 
