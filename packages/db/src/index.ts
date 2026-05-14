@@ -4323,3 +4323,33 @@ export const connectTelegramChatToProfile = async ({
 
   return toTelegramConnectionRecord(connection);
 };
+
+export const disconnectTelegramChatFromProfile = async (
+  userProfileId: string,
+): Promise<TelegramConnectionRecord | null> => {
+  const connection = await prisma.telegramConnection.findFirst({
+    where: {
+      userProfileId,
+      status: "connected",
+    },
+    orderBy: {
+      connectedAt: "desc",
+    },
+  });
+
+  if (!connection) {
+    return null;
+  }
+
+  const disconnected = await prisma.telegramConnection.update({
+    where: {
+      id: connection.id,
+    },
+    data: {
+      status: "disconnected",
+      disconnectedAt: new Date(),
+    },
+  });
+
+  return toTelegramConnectionRecord(disconnected);
+};

@@ -3,7 +3,11 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
-import { getOrCreatePersonalAlertProfile, updatePersonalAlertPreference } from "@jaguar/db";
+import {
+  disconnectTelegramChatFromProfile,
+  getOrCreatePersonalAlertProfile,
+  updatePersonalAlertPreference,
+} from "@jaguar/db";
 import { PERSONAS, type Persona, SOLANA_PROTOCOLS, type Verdict } from "@jaguar/domain";
 
 const DEMO_WALLET_ADDRESS = "jaguar-demo-wallet";
@@ -91,4 +95,13 @@ export async function sendTelegramTestAlert() {
 
   revalidatePath("/settings");
   redirectWithNotice("test_sent");
+}
+
+export async function disconnectTelegramAlertChat() {
+  const profile = await getOrCreatePersonalAlertProfile(DEMO_WALLET_ADDRESS);
+
+  await disconnectTelegramChatFromProfile(profile.userProfileId);
+
+  revalidatePath("/settings");
+  redirectWithNotice("disconnected");
 }

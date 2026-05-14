@@ -2,7 +2,7 @@ import { getOrCreatePersonalAlertProfile } from "@jaguar/db";
 import { PERSONAS, SOLANA_PROTOCOLS } from "@jaguar/domain";
 
 import { createTelegramConnectToken } from "@/lib/telegram-connect";
-import { sendTelegramTestAlert, updateAlertSettings } from "./actions";
+import { disconnectTelegramAlertChat, sendTelegramTestAlert, updateAlertSettings } from "./actions";
 
 const DEMO_WALLET_ADDRESS = "jaguar-demo-wallet";
 
@@ -10,6 +10,7 @@ const noticeCopy: Record<string, string> = {
   saved: "Alert profile saved.",
   test_sent: "Test alert sent to Telegram.",
   test_failed: "Telegram test failed. Check the bot token and chat connection.",
+  disconnected: "Telegram disconnected. You can connect another chat anytime.",
   connect_first: "Connect Telegram before sending a test alert.",
   bot_missing: "Telegram bot token is missing in the web runtime.",
   invalid: "One of the numeric settings is invalid.",
@@ -112,6 +113,12 @@ export default async function SettingsPage({ searchParams }: PageProps) {
                 <span>Send a harmless setup check to this Telegram chat.</span>
                 <button className="settings-primary-action settings-secondary-action" type="submit">
                   Send test
+                </button>
+              </form>
+              <form action={disconnectTelegramAlertChat} className="settings-action-row">
+                <span>Stop Telegram delivery for this chat.</span>
+                <button className="settings-primary-action settings-danger-action" type="submit">
+                  Disconnect
                 </button>
               </form>
             </>

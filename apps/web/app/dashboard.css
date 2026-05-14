@@ -2569,6 +2569,13 @@
     box-shadow: none;
   }
 
+  & .settings-danger-action {
+    border: 1px solid #efc6c8;
+    background: #fff7f7;
+    color: #a84b50;
+    box-shadow: none;
+  }
+
   & .settings-note {
     border-radius: 14px;
     background: #fff8e9;
