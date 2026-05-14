@@ -27,6 +27,7 @@ Most launch tools dump raw alerts and static scores. Jaguar does three things th
 - Autonomous Claude-powered analyst — fires on real signal transitions, writes decision memos tied to stored data
 - Paper trade attribution — Jaguar tracks whether its own calls held up
 - Alert compression — threshold-crossing alerts with 5-minute cooldown, no spam
+- Personal Telegram alerts — connect a chat, tune filters, and receive real-time trade alerts
 - Wallet monitor — connect Phantom to see live signals on tokens you hold
 - Analyst inbox — full activity log of memos, alerts, and paper calls
 
@@ -110,6 +111,45 @@ The dashboard populates as the worker ingests live Solana launch data from GoldR
 | `DIRECT_URL` | Supabase direct/session Postgres connection string for Prisma schema changes |
 | `JAGUAR_AGENT_PROVIDER` | `claude` or `openai` (default: `openai`) |
 | `OPENAI_API_KEY` | OpenAI key — only needed if using OpenAI provider |
+| `TELEGRAM_BOT_TOKEN` | Telegram bot token used by the web connect/test flow and worker alert delivery |
+| `TELEGRAM_CHAT_ID` | Optional operator/global Telegram chat for platform-level enter alerts |
+| `TELEGRAM_ALERT_PERSONAS` | Comma-separated personas for operator alerts, or `all` |
+| `TELEGRAM_ALERT_POLL_MS` | Worker poll interval for Telegram alert delivery |
+| `TELEGRAM_ALERT_LOOKBACK_MINUTES` | Worker lookback window for pending Telegram alerts |
+| `TELEGRAM_PERSONAL_ALERTS_ENABLED` | Set to `false` to disable per-user Telegram fanout |
+| `TELEGRAM_CONNECT_SECRET` | Secret used to sign Telegram connect tokens; falls back to `TELEGRAM_BOT_TOKEN` |
+
+---
+
+## Telegram personalization
+
+Jaguar can deliver personal trade alerts directly to Telegram.
+
+From **Settings**, a user can:
+
+- connect the Jaguar Telegram bot to a private chat
+- send a test alert to confirm delivery
+- disconnect the chat without losing alert history
+- enable or pause Telegram delivery
+- choose personas: `momentum`, `degen`, `risk-first`
+- choose alert verdicts: `watch`, `enter`
+- set minimum score, liquidity floor, protocol filters, and max alerts per hour
+
+The connect flow uses Telegram deep links:
+
+```text
+https://t.me/Jaguarxyz_bot?start=connect_<signed-token>
+```
+
+Telegram sends `/start connect_<signed-token>` to the webhook route:
+
+```text
+/api/telegram/webhook
+```
+
+The webhook verifies the signed token, links the Telegram `chat.id` to the user's alert profile, and stores the connection in Supabase. The worker then fans out matching `paper-trade-opened` alerts to connected chats and records each send in `AlertDelivery`.
+
+The global/operator alert path still works through `TELEGRAM_CHAT_ID`; personal delivery is separate and deduped per user.
 
 ---
 
