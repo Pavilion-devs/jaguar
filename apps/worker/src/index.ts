@@ -6,6 +6,7 @@ import {
   applyLaunchUpdate,
   applyPairOhlcvCandle,
   applyTokenOhlcvCandle,
+  countAgentMemosSince,
   getLatestAgentMemo,
   getLaunchDetail,
   listOhlcvCandidatePairAddresses,
@@ -37,7 +38,6 @@ const HEARTBEAT_INTERVAL_MS = 20_000;
 const MIN_SUBSCRIPTION_REFRESH_MS = 15_000;
 const STREAM_RECONNECT_DELAY_MS = 5_000;
 const STREAM_IDLE_RECONNECT_MS = 10 * 60_000;
-const ANALYST_COOLDOWN_MS = 10 * 60_000;
 const ANALYST_STALE_SCORE_DRIFT = 8;
 const MAX_ANALYST_QUEUE = 25;
 const parsePositiveNumber = (value: string | undefined, fallback: number) => {
@@ -45,6 +45,19 @@ const parsePositiveNumber = (value: string | undefined, fallback: number) => {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 };
 
+const ANALYST_COOLDOWN_MS = parsePositiveNumber(
+  process.env.JAGUAR_AUTONOMOUS_ANALYST_COOLDOWN_MS,
+  60 * 60_000,
+);
+const ANALYST_MIN_SCORE = parsePositiveNumber(process.env.JAGUAR_AUTONOMOUS_ANALYST_MIN_SCORE, 60);
+const ANALYST_MAX_MEMOS_PER_HOUR = parsePositiveNumber(
+  process.env.JAGUAR_AUTONOMOUS_ANALYST_MAX_MEMOS_PER_HOUR,
+  20,
+);
+const ANALYST_MAX_MEMOS_PER_DAY = parsePositiveNumber(
+  process.env.JAGUAR_AUTONOMOUS_ANALYST_MAX_MEMOS_PER_DAY,
+  100,
+);
 const TELEGRAM_ALERT_POLL_MS = parsePositiveNumber(process.env.TELEGRAM_ALERT_POLL_MS, 15_000);
 const TELEGRAM_ALERT_LOOKBACK_MINUTES = parsePositiveNumber(
   process.env.TELEGRAM_ALERT_LOOKBACK_MINUTES,
@@ -104,7 +117,8 @@ class AutonomousAnalyst {
       !this.enabled ||
       result.duplicate ||
       !result.launchId ||
-      result.analystTriggers.length === 0
+      result.analystTriggers.length === 0 ||
+      !this.isWorthMemo(result)
     ) {
       return;
     }
@@ -123,6 +137,30 @@ class AutonomousAnalyst {
     }
 
     void this.drain();
+  }
+
+  private isWorthMemo(result: IngestionApplyResult) {
+    if (result.verdict === "enter") {
+      return true;
+    }
+
+    if (result.score < ANALYST_MIN_SCORE) {
+      return false;
+    }
+
+    return result.analystTriggers.some((trigger) =>
+      ["paper-trade-opened", "verdict-enter", "discovery-graduated"].includes(trigger),
+    );
+  }
+
+  private async hasMemoBudget() {
+    const now = Date.now();
+    const [hourlyCount, dailyCount] = await Promise.all([
+      countAgentMemosSince(new Date(now - 60 * 60_000)),
+      countAgentMemosSince(new Date(now - 24 * 60 * 60_000)),
+    ]);
+
+    return hourlyCount < ANALYST_MAX_MEMOS_PER_HOUR && dailyCount < ANALYST_MAX_MEMOS_PER_DAY;
   }
 
   private async drain() {
@@ -157,6 +195,9 @@ class AutonomousAnalyst {
       const scoreDrift = latestMemo
         ? Math.abs(detail.launch.score - latestMemo.scoreAtMemo)
         : Number.POSITIVE_INFINITY;
+      const memoAgeMs = latestMemo
+        ? Date.now() - new Date(latestMemo.generatedAt).getTime()
+        : Number.POSITIVE_INFINITY;
       const hasDecisionTrigger = result.analystTriggers.some((trigger) =>
         [
           "discovery-graduated",
@@ -167,7 +208,15 @@ class AutonomousAnalyst {
         ].includes(trigger),
       );
 
+      if (latestMemo && memoAgeMs < ANALYST_COOLDOWN_MS) {
+        return;
+      }
+
       if (latestMemo && scoreDrift < ANALYST_STALE_SCORE_DRIFT && !hasDecisionTrigger) {
+        return;
+      }
+
+      if (!(await this.hasMemoBudget())) {
         return;
       }
 

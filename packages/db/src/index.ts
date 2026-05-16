@@ -2791,6 +2791,15 @@ export const getLatestAgentMemo = async (launchId: string): Promise<AgentMemoRec
   return memo ? toAgentMemoRecord(memo) : null;
 };
 
+export const countAgentMemosSince = async (since: Date): Promise<number> =>
+  prisma.launchMemo.count({
+    where: {
+      generatedAt: {
+        gte: since,
+      },
+    },
+  });
+
 export type LaunchSearchResult = {
   id: string;
   tokenSymbol: string;
