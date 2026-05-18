@@ -5,14 +5,37 @@ import type { McpApiKeyRecord } from "@jaguar/db";
 import { generateMcpKey, revokeMcpKey } from "./actions";
 
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL ?? "https://www.jaguaralpha.xyz";
+const MCP_URL = `${APP_URL}/api/mcp`;
 
-function mcpConfig(key: string) {
+type Client = "claude-code" | "claude-desktop" | "other";
+
+function claudeCodeCommand(key: string) {
+  return `claude mcp add --transport http jaguar ${MCP_URL} --header "Authorization: Bearer ${key}"`;
+}
+
+function claudeDesktopConfig(key: string) {
   return JSON.stringify(
     {
       mcpServers: {
         jaguar: {
           type: "http",
-          url: `${APP_URL}/api/mcp`,
+          url: MCP_URL,
+          headers: { Authorization: `Bearer ${key}` },
+        },
+      },
+    },
+    null,
+    2,
+  );
+}
+
+function otherConfig(key: string) {
+  return JSON.stringify(
+    {
+      mcpServers: {
+        jaguar: {
+          type: "http",
+          url: MCP_URL,
           headers: { Authorization: `Bearer ${key}` },
         },
       },
@@ -37,6 +60,74 @@ function CopyButton({ text }: { text: string }) {
   );
 }
 
+function ClientTabs({ active, onChange }: { active: Client; onChange: (c: Client) => void }) {
+  const tabs: { id: Client; label: string }[] = [
+    { id: "claude-code", label: "Claude Code" },
+    { id: "claude-desktop", label: "Claude Desktop" },
+    { id: "other", label: "Other / Custom" },
+  ];
+  return (
+    <div className="mcp-client-tabs">
+      {tabs.map((t) => (
+        <button
+          key={t.id}
+          type="button"
+          className={`mcp-client-tab${active === t.id ? " active" : ""}`}
+          onClick={() => onChange(t.id)}
+        >
+          {t.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function ConnectInstructions({ client, apiKey }: { client: Client; apiKey: string }) {
+  if (client === "claude-code") {
+    return (
+      <div className="mcp-instructions">
+        <div className="mcp-config-head">
+          <span>Run this command in your terminal:</span>
+          <CopyButton text={claudeCodeCommand(apiKey)} />
+        </div>
+        <pre className="mcp-config-block">{claudeCodeCommand(apiKey)}</pre>
+        <p className="mcp-instructions-note">
+          Then restart Claude Code. You can verify with <code>/mcp</code> — jaguar should show as connected.
+        </p>
+      </div>
+    );
+  }
+
+  if (client === "claude-desktop") {
+    return (
+      <div className="mcp-instructions">
+        <div className="mcp-config-head">
+          <span>Add this to your <code>claude_desktop_config.json</code>:</span>
+          <CopyButton text={claudeDesktopConfig(apiKey)} />
+        </div>
+        <pre className="mcp-config-block">{claudeDesktopConfig(apiKey)}</pre>
+        <p className="mcp-instructions-note">
+          File location — macOS: <code>~/Library/Application Support/Claude/claude_desktop_config.json</code>
+          <br />Windows: <code>%APPDATA%\Claude\claude_desktop_config.json</code>
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mcp-instructions">
+      <div className="mcp-config-head">
+        <span>Add this to your MCP client config:</span>
+        <CopyButton text={otherConfig(apiKey)} />
+      </div>
+      <pre className="mcp-config-block">{otherConfig(apiKey)}</pre>
+      <p className="mcp-instructions-note">
+        Works with any MCP-compatible client that supports HTTP transport and custom headers.
+      </p>
+    </div>
+  );
+}
+
 type Props = {
   initialKeys: McpApiKeyRecord[];
 };
@@ -45,13 +136,17 @@ export function McpPanel({ initialKeys }: Props) {
   const [keys, setKeys] = useState(initialKeys);
   const [newKey, setNewKey] = useState<string | null>(null);
   const [generating, setGenerating] = useState(false);
+  const [activeClient, setActiveClient] = useState<Client>("claude-code");
 
   const generate = async () => {
     setGenerating(true);
     try {
       const result = await generateMcpKey("Jaguar MCP");
       setNewKey(result.rawKey);
-      setKeys((prev) => [{ id: result.id, label: "Jaguar MCP", createdAt: result.createdAt, lastUsedAt: null }, ...prev]);
+      setKeys((prev) => [
+        { id: result.id, label: "Jaguar MCP", createdAt: result.createdAt, lastUsedAt: null },
+        ...prev,
+      ]);
     } finally {
       setGenerating(false);
     }
@@ -76,7 +171,8 @@ export function McpPanel({ initialKeys }: Props) {
       </div>
 
       <div className="settings-note mcp-explainer">
-        Your agent can ask: <em>"What are the top Solana launches right now?"</em> or <em>"Should I enter $SYMBOL?"</em> and get Jaguar's live scores, verdicts, and analyst memos back — not raw chain data.
+        Your agent can ask: <em>"What are the top Solana launches right now?"</em> or{" "}
+        <em>"Should I enter $SYMBOL?"</em> and get Jaguar's live scores, verdicts, and analyst memos — not raw chain data.
       </div>
 
       {newKey ? (
@@ -88,16 +184,11 @@ export function McpPanel({ initialKeys }: Props) {
             <code className="mcp-key-code">{newKey}</code>
             <CopyButton text={newKey} />
           </div>
-          <div className="mcp-config-head">
-            <span>Paste this into your Claude Code or Claude Desktop MCP config:</span>
-            <CopyButton text={mcpConfig(newKey)} />
-          </div>
-          <pre className="mcp-config-block">{mcpConfig(newKey)}</pre>
-          <button
-            type="button"
-            className="settings-copy-btn"
-            onClick={() => setNewKey(null)}
-          >
+
+          <ClientTabs active={activeClient} onChange={setActiveClient} />
+          <ConnectInstructions client={activeClient} apiKey={newKey} />
+
+          <button type="button" className="settings-copy-btn" onClick={() => setNewKey(null)}>
             Done
           </button>
         </div>
@@ -124,7 +215,9 @@ export function McpPanel({ initialKeys }: Props) {
                 <span className="mcp-key-label">{k.label ?? "Unnamed key"}</span>
                 <span className="mcp-key-meta">
                   Created {new Date(k.createdAt).toLocaleDateString()}
-                  {k.lastUsedAt ? ` · Last used ${new Date(k.lastUsedAt).toLocaleDateString()}` : " · Never used"}
+                  {k.lastUsedAt
+                    ? ` · Last used ${new Date(k.lastUsedAt).toLocaleDateString()}`
+                    : " · Never used"}
                 </span>
               </div>
               <button

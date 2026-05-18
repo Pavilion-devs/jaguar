@@ -2885,6 +2885,52 @@
     color: var(--muted);
   }
 
+  & .mcp-client-tabs {
+    display: flex;
+    gap: 4px;
+    background: var(--card-muted);
+    border-radius: 12px;
+    padding: 4px;
+  }
+
+  & .mcp-client-tab {
+    flex: 1;
+    border: 0;
+    background: transparent;
+    border-radius: 9px;
+    padding: 8px 12px;
+    font: 600 13px / 1 "Geist", sans-serif;
+    color: var(--muted);
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+  }
+
+  & .mcp-client-tab.active {
+    background: #fff;
+    color: var(--ink);
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
+  }
+
+  & .mcp-instructions {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  & .mcp-instructions-note {
+    margin: 0;
+    color: var(--muted);
+    font: 500 12px / 1.5 "Geist", sans-serif;
+  }
+
+  & .mcp-instructions-note code {
+    font: 600 11px / 1 "Geist Mono", monospace;
+    background: var(--card-muted);
+    padding: 2px 5px;
+    border-radius: 4px;
+    color: var(--ink);
+  }
+
   & .model-pill {
     display: inline-flex;
     align-items: center;
