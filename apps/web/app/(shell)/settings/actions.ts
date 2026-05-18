@@ -4,8 +4,11 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
 import {
+  createMcpApiKey,
   disconnectTelegramChatFromProfile,
   getOrCreatePersonalAlertProfile,
+  listMcpApiKeys,
+  revokeMcpApiKey,
   updatePersonalAlertPreference,
 } from "@jaguar/db";
 import { PERSONAS, type Persona, SOLANA_PROTOCOLS, type Verdict } from "@jaguar/domain";
@@ -95,6 +98,19 @@ export async function sendTelegramTestAlert() {
 
   revalidatePath("/settings");
   redirectWithNotice("test_sent");
+}
+
+export async function generateMcpKey(label?: string) {
+  return createMcpApiKey(label);
+}
+
+export async function revokeMcpKey(id: string) {
+  await revokeMcpApiKey(id);
+  revalidatePath("/settings");
+}
+
+export async function getMcpKeys() {
+  return listMcpApiKeys();
 }
 
 export async function disconnectTelegramAlertChat() {

@@ -1,7 +1,8 @@
-import { getOrCreatePersonalAlertProfile } from "@jaguar/db";
+import { getOrCreatePersonalAlertProfile, listMcpApiKeys } from "@jaguar/db";
 import { PERSONAS, SOLANA_PROTOCOLS } from "@jaguar/domain";
 
 import { createTelegramConnectToken } from "@/lib/telegram-connect";
+import { McpPanel } from "./mcp-panel";
 import { disconnectTelegramAlertChat, sendTelegramTestAlert, updateAlertSettings } from "./actions";
 
 const DEMO_WALLET_ADDRESS = "jaguar-demo-wallet";
@@ -36,7 +37,10 @@ type PageProps = {
 
 export default async function SettingsPage({ searchParams }: PageProps) {
   const params = await searchParams;
-  const profile = await getOrCreatePersonalAlertProfile(DEMO_WALLET_ADDRESS);
+  const [profile, mcpKeys] = await Promise.all([
+    getOrCreatePersonalAlertProfile(DEMO_WALLET_ADDRESS),
+    listMcpApiKeys(),
+  ]);
   const connectToken = createTelegramConnectToken(profile.userProfileId);
   const telegramDeepLink = `https://t.me/Jaguarxyz_bot?start=connect_${connectToken}`;
   const notice = params?.notice ? noticeCopy[params.notice] : null;
@@ -169,6 +173,8 @@ export default async function SettingsPage({ searchParams }: PageProps) {
             </div>
           </div>
         </section>
+
+        <McpPanel initialKeys={mcpKeys} />
 
         <section className="card settings-panel settings-panel-wide">
           <div className="settings-panel-head">

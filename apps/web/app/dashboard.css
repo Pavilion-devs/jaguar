@@ -2763,6 +2763,128 @@
     font: 700 14px / 1 "Geist", sans-serif;
   }
 
+  & .mcp-explainer {
+    border-radius: 14px;
+    background: #f0f7ff;
+    border: 1px solid #c8dcf5;
+    color: #2d5a8e;
+    padding: 13px 16px;
+    font: 500 13px / 1.5 "Geist", sans-serif;
+  }
+
+  & .mcp-explainer em {
+    font-style: normal;
+    font-weight: 700;
+    color: #1a3f6f;
+  }
+
+  & .mcp-key-reveal {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 16px;
+    border-radius: 14px;
+    background: #f9fdfb;
+    border: 1px solid #cde8d7;
+  }
+
+  & .mcp-key-reveal-head strong {
+    display: block;
+    color: var(--ink);
+    font: 700 13px / 1.3 "Geist", sans-serif;
+  }
+
+  & .mcp-key-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: #fff;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 10px 14px;
+  }
+
+  & .mcp-key-code {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font: 600 12px / 1 "Geist Mono", monospace;
+    color: var(--ink);
+  }
+
+  & .mcp-config-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+  }
+
+  & .mcp-config-head span {
+    color: var(--muted);
+    font: 600 13px / 1 "Geist", sans-serif;
+  }
+
+  & .mcp-config-block {
+    margin: 0;
+    padding: 14px 16px;
+    border-radius: 10px;
+    background: #f4f4f5;
+    border: 1px solid var(--line);
+    font: 500 12px / 1.6 "Geist Mono", monospace;
+    color: var(--ink);
+    white-space: pre;
+    overflow-x: auto;
+  }
+
+  & .settings-copy-btn {
+    flex: 0 0 auto;
+    border: 1px solid var(--line);
+    background: #fff;
+    color: var(--green);
+    border-radius: 999px;
+    padding: 0 14px;
+    min-height: 34px;
+    font: 700 12px / 1 "Geist", sans-serif;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+
+  & .mcp-keys-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding-top: 14px;
+    border-top: 1px solid var(--line);
+  }
+
+  & .mcp-key-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+    padding: 12px 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  & .mcp-key-item:last-child {
+    border-bottom: 0;
+  }
+
+  & .mcp-key-label {
+    display: block;
+    font: 700 14px / 1.2 "Geist", sans-serif;
+    color: var(--ink);
+  }
+
+  & .mcp-key-meta {
+    display: block;
+    margin-top: 3px;
+    font: 500 12px / 1 "Geist", sans-serif;
+    color: var(--muted);
+  }
+
   & .model-pill {
     display: inline-flex;
     align-items: center;

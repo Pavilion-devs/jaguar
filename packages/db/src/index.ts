@@ -4362,3 +4362,55 @@ export const disconnectTelegramChatFromProfile = async (
 
   return toTelegramConnectionRecord(disconnected);
 };
+
+// ---------------------------------------------------------------------------
+// MCP API Keys
+// ---------------------------------------------------------------------------
+
+import { createHash, randomBytes } from "node:crypto";
+
+const hashApiKey = (key: string) => createHash("sha256").update(key).digest("hex");
+
+export type McpApiKeyRecord = {
+  id: string;
+  label: string | null;
+  createdAt: string;
+  lastUsedAt: string | null;
+};
+
+export const createMcpApiKey = async (label?: string): Promise<{ id: string; rawKey: string; createdAt: string }> => {
+  const rawKey = `jag_${randomBytes(32).toString("hex")}`;
+  const keyHash = hashApiKey(rawKey);
+  const record = await prisma.mcpApiKey.create({
+    data: { keyHash, label: label ?? null },
+  });
+  return { id: record.id, rawKey, createdAt: record.createdAt.toISOString() };
+};
+
+export const validateMcpApiKey = async (rawKey: string): Promise<boolean> => {
+  const keyHash = hashApiKey(rawKey);
+  const record = await prisma.mcpApiKey.findUnique({ where: { keyHash } });
+  if (!record) return false;
+  void prisma.mcpApiKey.update({
+    where: { keyHash },
+    data: { lastUsedAt: new Date() },
+  }).catch(() => undefined);
+  return true;
+};
+
+export const listMcpApiKeys = async (): Promise<McpApiKeyRecord[]> => {
+  const keys = await prisma.mcpApiKey.findMany({
+    orderBy: { createdAt: "desc" },
+    select: { id: true, label: true, createdAt: true, lastUsedAt: true },
+  });
+  return keys.map((k) => ({
+    id: k.id,
+    label: k.label,
+    createdAt: k.createdAt.toISOString(),
+    lastUsedAt: k.lastUsedAt?.toISOString() ?? null,
+  }));
+};
+
+export const revokeMcpApiKey = async (id: string): Promise<void> => {
+  await prisma.mcpApiKey.delete({ where: { id } });
+};
