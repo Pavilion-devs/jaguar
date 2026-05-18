@@ -7,7 +7,7 @@ import {
   listLaunchBoard,
   searchLaunches,
 } from "@jaguar/db";
-import type { Persona } from "@jaguar/domain";
+import type { Persona, Verdict } from "@jaguar/domain";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
@@ -143,11 +143,16 @@ server.tool(
       .enum(["degen", "momentum", "risk-first", "all"])
       .default("all")
       .describe("Persona to filter by, or 'all' for combined scorecard"),
+    verdict_filter: z
+      .enum(["enter", "watch", "all"])
+      .default("all")
+      .describe("Filter to enter-only or watch-only calls. Use 'enter' to see enter-only win rate."),
   },
-  async ({ persona }) => {
+  async ({ persona, verdict_filter }) => {
     const scorecard = await getRecommendationScorecard(
       6,
       persona === "all" ? undefined : (persona as Persona),
+      verdict_filter === "all" ? undefined : (verdict_filter as Verdict),
     );
 
     const lines = [

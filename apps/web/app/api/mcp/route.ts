@@ -8,7 +8,7 @@ import {
   searchLaunches,
   validateMcpApiKey,
 } from "@jaguar/db";
-import type { Persona } from "@jaguar/domain";
+import type { Persona, Verdict } from "@jaguar/domain";
 import { type NextRequest, NextResponse } from "next/server";
 
 const PROTOCOL_VERSION = "2024-11-05";
@@ -134,9 +134,11 @@ async function callTool(name: string, args: Record<string, unknown>) {
 
     case "get_scorecard": {
       const persona = args.persona as string | undefined;
+      const verdictArg = args.verdict_filter as string | undefined;
       const scorecard = await getRecommendationScorecard(
         6,
         persona === "all" || !persona ? undefined : (persona as Persona),
+        verdictArg === "all" || !verdictArg ? undefined : (verdictArg as Verdict),
       );
       const lines = [
         `JAGUAR SCORECARD${persona && persona !== "all" ? ` (${persona})` : ""}`,
@@ -223,11 +225,12 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: "get_scorecard",
-    description: "Jaguar's paper trade win rate and recent recommendation outcomes.",
+    description: "Jaguar's paper trade win rate and outcomes. Filter by persona and/or verdict — use verdict_filter='enter' to see enter-only win rate.",
     inputSchema: {
       type: "object",
       properties: {
         persona: { type: "string", enum: ["degen", "momentum", "risk-first", "all"], default: "all" },
+        verdict_filter: { type: "string", enum: ["enter", "watch", "all"], default: "all", description: "Filter to enter-only or watch-only calls" },
       },
     },
   },

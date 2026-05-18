@@ -2256,12 +2256,12 @@ export const recomputeAllLaunchStates = async () => {
 export const getRecommendationScorecard = async (
   recentLimit = 6,
   persona?: Persona,
+  verdict?: Verdict,
 ): Promise<RecommendationScorecard> => {
-  const where = persona
-    ? {
-        persona: personaToPrisma[persona],
-      }
-    : undefined;
+  const where = {
+    ...(persona ? { persona: personaToPrisma[persona] } : {}),
+    ...(verdict ? { verdict } : {}),
+  };
   const [totalIssued, openCount, validatedCount, failedCount, expiredCount, recentRecommendations] =
     await Promise.all([
       prisma.recommendation.count({ where }),
