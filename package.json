@@ -6,6 +6,7 @@
   "scripts": {
     "dev:web": "pnpm --filter @jaguar/web dev",
     "dev:worker": "pnpm --filter @jaguar/worker dev",
+    "dev:mcp": "pnpm --filter @jaguar/mcp dev",
     "build": "pnpm -r --if-present build",
     "typecheck": "pnpm -r --if-present typecheck",
     "test": "pnpm -r --if-present test",
