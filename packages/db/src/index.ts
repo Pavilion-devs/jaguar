@@ -105,6 +105,8 @@ type RecommendationWithOutcomes = Prisma.RecommendationGetPayload<{
 
 type TransactionClient = Prisma.TransactionClient;
 
+const STORE_RAW_LAUNCH_EVENTS = process.env.JAGUAR_STORE_RAW_EVENTS === "true";
+
 const currencyFormatter = new Intl.NumberFormat("en-US", {
   style: "currency",
   currency: "USD",
@@ -120,6 +122,9 @@ const optionalInteger = (value: number | null | undefined) =>
   value == null ? undefined : Math.round(value);
 
 const clampConfidence = (value: number) => Math.min(100, Math.max(0, value));
+
+const sameTimestamp = (left: Date | null | undefined, right: Date) =>
+  left?.getTime() === right.getTime();
 
 const safePercentChange = (current: number, previous: number) => {
   if (!Number.isFinite(current) || !Number.isFinite(previous) || previous === 0) {
@@ -2999,15 +3004,20 @@ export const upsertLaunchFromNewPair = async (event: GoldRushNewPairEvent) => {
       include: launchWithStateInclude,
     });
 
-    const duplicateEvent = await tx.launchEvent.findFirst({
-      where: {
-        launchId: launch.id,
-        eventType: "pair_created",
-        eventTime,
-      },
-    });
+    const duplicateEvent = STORE_RAW_LAUNCH_EVENTS
+      ? await tx.launchEvent.findFirst({
+          where: {
+            launchId: launch.id,
+            eventType: "pair_created",
+            eventTime,
+          },
+        })
+      : null;
 
-    if (duplicateEvent) {
+    const duplicateNewPair =
+      duplicateEvent || (Boolean(previous) && sameTimestamp(launch.firstSeenAt, eventTime));
+
+    if (duplicateNewPair) {
       const currentScore = scoreLaunch(toSnapshot(launch));
 
       return {
@@ -3122,15 +3132,17 @@ export const upsertLaunchFromNewPair = async (event: GoldRushNewPairEvent) => {
       },
     });
 
-    await tx.launchEvent.create({
-      data: {
-        launchId: launch.id,
-        eventType: "pair_created",
-        eventTime,
-        sourceStream: "newPairs",
-        payloadJson: JSON.stringify(event),
-      },
-    });
+    if (STORE_RAW_LAUNCH_EVENTS) {
+      await tx.launchEvent.create({
+        data: {
+          launchId: launch.id,
+          eventType: "pair_created",
+          eventTime,
+          sourceStream: "newPairs",
+          payloadJson: JSON.stringify(event),
+        },
+      });
+    }
 
     if (!previous) {
       await tx.launchTimeline.create({
@@ -3183,7 +3195,7 @@ export const upsertLaunchFromNewPair = async (event: GoldRushNewPairEvent) => {
 
 export const applyLaunchUpdate = async (event: GoldRushUpdatePairEvent) => {
   const eventTime = new Date(event.timestamp);
-  const payloadJson = JSON.stringify(event);
+  const payloadJson = STORE_RAW_LAUNCH_EVENTS ? JSON.stringify(event) : null;
 
   return prisma.$transaction(async (tx) => {
     const previous = await tx.launch.findUnique({
@@ -3228,15 +3240,18 @@ export const applyLaunchUpdate = async (event: GoldRushUpdatePairEvent) => {
       include: launchWithStateInclude,
     });
 
-    const duplicateEvent = await tx.launchEvent.findFirst({
-      where: {
-        launchId: launch.id,
-        eventType: "pair_updated",
-        eventTime,
-        sourceStream: "updatePairs",
-        payloadJson,
-      },
-    });
+    const duplicateEvent =
+      STORE_RAW_LAUNCH_EVENTS && payloadJson
+        ? await tx.launchEvent.findFirst({
+            where: {
+              launchId: launch.id,
+              eventType: "pair_updated",
+              eventTime,
+              sourceStream: "updatePairs",
+              payloadJson,
+            },
+          })
+        : null;
 
     const pairCandleSummary = await loadPairCandleSummary(tx, launch.id);
     const tokenCandleSummary = await loadTokenCandleSummary(tx, launch.id);
@@ -3306,7 +3321,10 @@ export const applyLaunchUpdate = async (event: GoldRushUpdatePairEvent) => {
       },
     };
 
-    if (duplicateEvent) {
+    const duplicateUpdate =
+      duplicateEvent || sameTimestamp(previous?.state?.lastEventAt, eventTime);
+
+    if (duplicateUpdate) {
       const currentScore = scoreLaunch(toSnapshot(draftLaunch));
 
       return {
@@ -3400,15 +3418,17 @@ export const applyLaunchUpdate = async (event: GoldRushUpdatePairEvent) => {
       },
     });
 
-    await tx.launchEvent.create({
-      data: {
-        launchId: launch.id,
-        eventType: "pair_updated",
-        eventTime,
-        sourceStream: "updatePairs",
-        payloadJson,
-      },
-    });
+    if (STORE_RAW_LAUNCH_EVENTS && payloadJson) {
+      await tx.launchEvent.create({
+        data: {
+          launchId: launch.id,
+          eventType: "pair_updated",
+          eventTime,
+          sourceStream: "updatePairs",
+          payloadJson,
+        },
+      });
+    }
 
     const timelineEntries = buildTimelineEntries({
       launchId: launch.id,
@@ -3538,15 +3558,17 @@ export const applyPairOhlcvCandle = async (event: GoldRushOhlcvPairCandleEvent) 
       },
     });
 
-    await tx.launchEvent.create({
-      data: {
-        launchId: launch.id,
-        eventType: "pair_ohlcv_candle",
-        eventTime,
-        sourceStream: "ohlcvCandlesForPair",
-        payloadJson: JSON.stringify(event),
-      },
-    });
+    if (STORE_RAW_LAUNCH_EVENTS) {
+      await tx.launchEvent.create({
+        data: {
+          launchId: launch.id,
+          eventType: "pair_ohlcv_candle",
+          eventTime,
+          sourceStream: "ohlcvCandlesForPair",
+          payloadJson: JSON.stringify(event),
+        },
+      });
+    }
 
     const pairCandleSummary = await loadPairCandleSummary(tx, launch.id);
     const tokenCandleSummary = await loadTokenCandleSummary(tx, launch.id);
@@ -3789,15 +3811,17 @@ export const applyTokenOhlcvCandle = async (event: GoldRushOhlcvTokenCandleEvent
       },
     });
 
-    await tx.launchEvent.create({
-      data: {
-        launchId: previous.id,
-        eventType: "token_ohlcv_candle",
-        eventTime,
-        sourceStream: "ohlcvCandlesForToken",
-        payloadJson: JSON.stringify(event),
-      },
-    });
+    if (STORE_RAW_LAUNCH_EVENTS) {
+      await tx.launchEvent.create({
+        data: {
+          launchId: previous.id,
+          eventType: "token_ohlcv_candle",
+          eventTime,
+          sourceStream: "ohlcvCandlesForToken",
+          payloadJson: JSON.stringify(event),
+        },
+      });
+    }
 
     const pairCandleSummary = await loadPairCandleSummary(tx, previous.id);
     const tokenCandleSummary = await loadTokenCandleSummary(tx, previous.id);
@@ -4378,7 +4402,9 @@ export type McpApiKeyRecord = {
   lastUsedAt: string | null;
 };
 
-export const createMcpApiKey = async (label?: string): Promise<{ id: string; rawKey: string; createdAt: string }> => {
+export const createMcpApiKey = async (
+  label?: string,
+): Promise<{ id: string; rawKey: string; createdAt: string }> => {
   const rawKey = `jag_${randomBytes(32).toString("hex")}`;
   const keyHash = hashApiKey(rawKey);
   const record = await prisma.mcpApiKey.create({
@@ -4391,10 +4417,12 @@ export const validateMcpApiKey = async (rawKey: string): Promise<boolean> => {
   const keyHash = hashApiKey(rawKey);
   const record = await prisma.mcpApiKey.findUnique({ where: { keyHash } });
   if (!record) return false;
-  void prisma.mcpApiKey.update({
-    where: { keyHash },
-    data: { lastUsedAt: new Date() },
-  }).catch(() => undefined);
+  void prisma.mcpApiKey
+    .update({
+      where: { keyHash },
+      data: { lastUsedAt: new Date() },
+    })
+    .catch(() => undefined);
   return true;
 };
 
