@@ -105,6 +105,19 @@ const PersonasIcon = () => (
   </svg>
 );
 
+const OpsIcon = () => (
+  <svg viewBox="0 0 24 24" fill="none">
+    <title>Ops</title>
+    <path
+      d="M3 12h4l2 6 4-14 2 8h6"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+  </svg>
+);
+
 const SettingsIcon = () => (
   <svg viewBox="0 0 24 24" fill="none">
     <title>Settings</title>
@@ -125,6 +138,7 @@ const MENU: NavItem[] = [
   { label: "Alerts", href: "/alerts", icon: <AlertsIcon /> },
   { label: "Scorecard", href: "/scorecard", icon: <ScorecardIcon /> },
   { label: "Personas", href: "/personas", icon: <PersonasIcon /> },
+  { label: "Ops", href: "/ops", icon: <OpsIcon /> },
   { label: "Settings", href: "/settings", icon: <SettingsIcon /> },
 ];
 

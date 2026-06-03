@@ -40,6 +40,41 @@ enum Severity {
   critical
 }
 
+enum OperationalEventType {
+  worker_started
+  worker_stopped
+  heartbeat_stale
+  stream_reconnect
+  stream_error
+  memo_failure
+  telegram_failure
+  recovery_complete
+  deploy
+  action_executed
+  action_failed
+}
+
+enum ActionRequestStatus {
+  proposed
+  approved
+  rejected
+  executing
+  executed
+  failed
+}
+
+enum ActionRiskLevel {
+  low
+  medium
+  high
+}
+
+enum ActionType {
+  worker_restart
+  rollback
+  health_verify
+}
+
 model Launch {
   id                String           @id @default(cuid())
   chainName         String
@@ -333,4 +368,62 @@ model WorkerHeartbeat {
   tokenCandleCandidateCount Int
   createdAt                 DateTime @default(now())
   updatedAt                 DateTime @updatedAt
+}
+
+// Normalized operational/incident events for the ops surface (read by Halo).
+// Emitted best-effort by the worker and ops-runner; never on the hot path.
+model OperationalEvent {
+  id              String               @id @default(cuid())
+  type            OperationalEventType
+  severity        Severity             @default(info)
+  subsystem       String // worker | ingestion | analyst | telegram | ops-runner | deploy
+  title           String
+  summary         String
+  metadataJson    String?
+  actionRequestId String?
+  createdAt       DateTime             @default(now())
+
+  @@index([type, createdAt])
+  @@index([subsystem, createdAt])
+  @@index([severity, createdAt])
+}
+
+// Deploy history. The worker self-records on boot from a baked git SHA; the web
+// app self-records from Vercel build env; the ops-runner records on rollback.
+model DeployEvent {
+  id           String   @id @default(cuid())
+  gitSha       String
+  shortSha     String
+  service      String   @default("jaguar-worker") // jaguar-worker | jaguar-web
+  source       String   @default("worker_boot") // worker_boot | vercel_build | ops_runner_rollback | manual
+  previousSha  String?
+  detectedAt   DateTime @default(now())
+  metadataJson String?
+
+  @@index([service, detectedAt])
+  @@index([gitSha])
+}
+
+// Approval-gated action requests. Halo proposes; an operator approves; the
+// VPS-side ops-runner claims approved rows, executes, and writes results back.
+model ActionRequest {
+  id          String              @id @default(cuid())
+  actionType  ActionType
+  status      ActionRequestStatus @default(proposed)
+  riskLevel   ActionRiskLevel     @default(medium)
+  title       String
+  reason      String
+  payloadJson String?
+  proposedBy  String // "halo"
+  resolvedBy  String?
+  resultJson  String?
+  createdAt   DateTime            @default(now())
+  approvedAt  DateTime?
+  rejectedAt  DateTime?
+  startedAt   DateTime? // ops-runner claimed -> executing
+  completedAt DateTime? // executed | failed
+  updatedAt   DateTime            @updatedAt
+
+  @@index([status, createdAt])
+  @@index([actionType, status])
 }

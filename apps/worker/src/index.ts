@@ -15,6 +15,8 @@ import {
   listPendingTelegramEnterAlerts,
   listTrackedPairAddresses,
   markAlertDelivered,
+  recordDeployEvent,
+  recordOperationalEvent,
   recordPersonalTelegramAlertDelivery,
   saveAgentMemo,
   upsertLaunchFromNewPair,
@@ -248,6 +250,14 @@ class AutonomousAnalyst {
         `[analyst] memo generation failed for ${result.pairAddress}`,
         error instanceof Error ? error.message : error,
       );
+      void recordOperationalEvent({
+        type: "memo_failure",
+        severity: "warn",
+        subsystem: "analyst",
+        title: `Memo generation failed for ${result.pairAddress}`,
+        summary: error instanceof Error ? error.message : String(error),
+        metadata: { pairAddress: result.pairAddress, triggers: result.analystTriggers },
+      }).catch(() => undefined);
     }
   }
 }
@@ -347,6 +357,13 @@ class TelegramEnterNotifier {
         "Telegram enter alert drain failed",
         error instanceof Error ? error.message : error,
       );
+      void recordOperationalEvent({
+        type: "telegram_failure",
+        severity: "warn",
+        subsystem: "telegram",
+        title: "Telegram operator alert drain failed",
+        summary: error instanceof Error ? error.message : String(error),
+      }).catch(() => undefined);
     } finally {
       this.isDraining = false;
     }
@@ -382,6 +399,14 @@ class TelegramEnterNotifier {
           `[telegram] personal enter alert failed for ${alert.pairAddress} to ${alert.walletAddress}`,
           message,
         );
+        void recordOperationalEvent({
+          type: "telegram_failure",
+          severity: "info",
+          subsystem: "telegram",
+          title: `Personal Telegram alert failed for ${alert.pairAddress}`,
+          summary: message,
+          metadata: { pairAddress: alert.pairAddress, wallet: alert.walletAddress },
+        }).catch(() => undefined);
       }
     }
   }
@@ -581,6 +606,14 @@ class UpdateStreamCoordinator {
     console.warn(
       `${reason}; reconnecting tracked GoldRush streams in ${STREAM_RECONNECT_DELAY_MS}ms.`,
     );
+    void recordOperationalEvent({
+      type: "stream_reconnect",
+      severity: "warn",
+      subsystem: "ingestion",
+      title: "Reconnecting tracked GoldRush streams",
+      summary: reason,
+      metadata: { delayMs: STREAM_RECONNECT_DELAY_MS },
+    }).catch(() => undefined);
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       if (this.isStaleSubscriptionSignal(subscriptionVersion)) {
@@ -691,6 +724,14 @@ class UpdateStreamCoordinator {
         },
         error: (error) => {
           console.error("updatePairs subscription error", error);
+          void recordOperationalEvent({
+            type: "stream_error",
+            severity: "warn",
+            subsystem: "ingestion",
+            title: "updatePairs subscription error",
+            summary: error instanceof Error ? error.message : String(error),
+            metadata: { stream: "updatePairs" },
+          }).catch(() => undefined);
           this.scheduleReconnect("updatePairs subscription error", subscriptionVersion);
         },
         complete: () => {
@@ -735,6 +776,14 @@ class UpdateStreamCoordinator {
           },
           error: (error) => {
             console.error("ohlcvCandlesForPair subscription error", error);
+            void recordOperationalEvent({
+              type: "stream_error",
+              severity: "warn",
+              subsystem: "ingestion",
+              title: "ohlcvCandlesForPair subscription error",
+              summary: error instanceof Error ? error.message : String(error),
+              metadata: { stream: "ohlcvCandlesForPair" },
+            }).catch(() => undefined);
             this.scheduleReconnect("ohlcvCandlesForPair subscription error", subscriptionVersion);
           },
           complete: () => {
@@ -787,6 +836,14 @@ class UpdateStreamCoordinator {
           },
           error: (error) => {
             console.error("ohlcvCandlesForToken subscription error", error);
+            void recordOperationalEvent({
+              type: "stream_error",
+              severity: "warn",
+              subsystem: "ingestion",
+              title: "ohlcvCandlesForToken subscription error",
+              summary: error instanceof Error ? error.message : String(error),
+              metadata: { stream: "ohlcvCandlesForToken" },
+            }).catch(() => undefined);
             this.scheduleReconnect("ohlcvCandlesForToken subscription error", subscriptionVersion);
           },
           complete: () => {
@@ -858,6 +915,31 @@ const main = async () => {
   await updateCoordinator.seedFromDatabase();
   telegramNotifier.start();
 
+  void recordOperationalEvent({
+    type: "worker_started",
+    severity: "info",
+    subsystem: "worker",
+    title: `Worker started (${workerKey})`,
+    summary: `Streaming ${config.chainName} from ${config.streamUrl}`,
+    metadata: {
+      chainName: config.chainName,
+      trackedProtocolCount: config.trackedProtocols.length,
+      gitSha: process.env.JAGUAR_GIT_SHA ?? null,
+    },
+  }).catch(() => undefined);
+
+  // Self-record a deploy when the baked git SHA differs from the last one.
+  // recordDeployEvent is idempotent, so plain restarts are no-ops.
+  const gitSha = process.env.JAGUAR_GIT_SHA;
+  if (gitSha) {
+    void recordDeployEvent({
+      gitSha,
+      service: "jaguar-worker",
+      source: "worker_boot",
+      metadata: { chainName: config.chainName },
+    }).catch(() => undefined);
+  }
+
   const persistHeartbeat = async () => {
     const snapshot = updateCoordinator.snapshot();
 
@@ -880,6 +962,13 @@ const main = async () => {
   const heartbeatTimer = setInterval(() => {
     void persistHeartbeat().catch((error: unknown) => {
       console.error("worker heartbeat failed", error);
+      void recordOperationalEvent({
+        type: "heartbeat_stale",
+        severity: "warn",
+        subsystem: "worker",
+        title: "Worker heartbeat write failed",
+        summary: error instanceof Error ? error.message : String(error),
+      }).catch(() => undefined);
     });
   }, HEARTBEAT_INTERVAL_MS);
 
@@ -899,6 +988,14 @@ const main = async () => {
     }
 
     console.warn(`${reason}; reconnecting newPairs in ${STREAM_RECONNECT_DELAY_MS}ms.`);
+    void recordOperationalEvent({
+      type: "stream_reconnect",
+      severity: "warn",
+      subsystem: "ingestion",
+      title: "Reconnecting newPairs stream",
+      summary: reason,
+      metadata: { stream: "newPairs", delayMs: STREAM_RECONNECT_DELAY_MS },
+    }).catch(() => undefined);
     newPairsReconnectTimer = setTimeout(() => {
       newPairsReconnectTimer = null;
       if (subscriptionVersion !== newPairsSubscriptionVersion || updateCoordinator.isClosed()) {
@@ -969,6 +1066,14 @@ const main = async () => {
       },
       error: (error) => {
         console.error("newPairs subscription error", error);
+        void recordOperationalEvent({
+          type: "stream_error",
+          severity: "warn",
+          subsystem: "ingestion",
+          title: "newPairs subscription error",
+          summary: error instanceof Error ? error.message : String(error),
+          metadata: { stream: "newPairs" },
+        }).catch(() => undefined);
         scheduleNewPairsReconnect("newPairs subscription error", subscriptionVersion);
       },
       complete: () => {
@@ -985,6 +1090,13 @@ const main = async () => {
 
   const shutdown = () => {
     console.log("Shutting down Jaguar worker");
+    void recordOperationalEvent({
+      type: "worker_stopped",
+      severity: "warn",
+      subsystem: "worker",
+      title: `Worker stopping (${workerKey})`,
+      summary: "Received shutdown signal (SIGINT/SIGTERM)",
+    }).catch(() => undefined);
     clearInterval(heartbeatTimer);
     if (newPairsReconnectTimer) {
       clearTimeout(newPairsReconnectTimer);
