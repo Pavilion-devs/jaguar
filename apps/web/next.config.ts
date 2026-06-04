@@ -23,6 +23,7 @@ const nextConfig: NextConfig = {
     "@jaguar/db",
     "@jaguar/domain",
     "@jaguar/goldrush",
+    "@jaguar/mcp",
     "@jaguar/scoring",
   ],
 };

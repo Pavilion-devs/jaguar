@@ -24,6 +24,13 @@ import { ALERT_TYPES, PERSONAS, REASON_CODES } from "@jaguar/domain";
 import { scoreLaunch, scoreLaunchBoard } from "@jaguar/scoring";
 import { PrismaPg } from "@prisma/adapter-pg";
 import {
+  type ActionRequest as ActionRequestRow,
+  type ActionRequestStatus,
+  type ActionRiskLevel,
+  type ActionType,
+  type DeployEvent as DeployEventRow,
+  type OperationalEvent as OperationalEventRow,
+  type OperationalEventType,
   type Prisma,
   PrismaClient,
   Persona as PrismaPersona,
@@ -105,7 +112,9 @@ type RecommendationWithOutcomes = Prisma.RecommendationGetPayload<{
 
 type TransactionClient = Prisma.TransactionClient;
 
-const STORE_RAW_LAUNCH_EVENTS = process.env.JAGUAR_STORE_RAW_EVENTS === "true";
+// Raw LaunchEvent rows power per-source ingestion freshness in
+// getIngestionDiagnostics. Default ON; set JAGUAR_STORE_RAW_EVENTS="false" to opt out.
+const STORE_RAW_LAUNCH_EVENTS = process.env.JAGUAR_STORE_RAW_EVENTS !== "false";
 
 const currencyFormatter = new Intl.NumberFormat("en-US", {
   style: "currency",
@@ -136,6 +145,68 @@ const safePercentChange = (current: number, previous: number) => {
 
 const minutesBetween = (value: Date) =>
   Math.max(0, Math.round((Date.now() - value.getTime()) / 60_000));
+
+// Mirrors of the worker's own timing constants (apps/worker/src/index.ts). Kept
+// local so packages/db never imports the worker. Used to classify health.
+const HEARTBEAT_OFFLINE_MS = 60_000; // 3x the worker's 20s heartbeat interval
+const STREAM_STALE_MS = 10 * 60_000; // worker's STREAM_IDLE_RECONNECT_MS
+const CANDLE_DEGRADED_MS = 3 * 60_000;
+
+export type HealthClassification = "healthy" | "degraded" | "stale" | "offline";
+
+export type HealthAssessment = {
+  status: HealthClassification;
+  reasons: string[];
+  heartbeatAgeSeconds: number | null;
+};
+
+// Classify worker/ingestion health from heartbeat age plus stream/candle
+// recency. "offline" = no/old heartbeat; "stale" = heartbeat fresh but no stream
+// activity; "degraded" = streaming but candle persistence lagging.
+const classifyStaleness = (input: {
+  heartbeatAt: Date | null;
+  lastStreamEventAt: Date | null;
+  lastCandleAt: Date | null;
+}): HealthAssessment => {
+  const now = Date.now();
+  const heartbeatAgeMs = input.heartbeatAt ? now - input.heartbeatAt.getTime() : null;
+  const heartbeatAgeSeconds = heartbeatAgeMs == null ? null : Math.round(heartbeatAgeMs / 1000);
+  const reasons: string[] = [];
+
+  if (heartbeatAgeMs == null) {
+    return { status: "offline", reasons: ["no heartbeat recorded"], heartbeatAgeSeconds };
+  }
+  if (heartbeatAgeMs > HEARTBEAT_OFFLINE_MS) {
+    reasons.push(`heartbeat ${heartbeatAgeSeconds}s old (>${HEARTBEAT_OFFLINE_MS / 1000}s)`);
+    return { status: "offline", reasons, heartbeatAgeSeconds };
+  }
+
+  const streamAgeMs = input.lastStreamEventAt ? now - input.lastStreamEventAt.getTime() : null;
+  if (streamAgeMs == null || streamAgeMs > STREAM_STALE_MS) {
+    reasons.push(
+      streamAgeMs == null
+        ? "no stream events recorded"
+        : `no stream activity for ${Math.round(streamAgeMs / 60_000)}m`,
+    );
+    return { status: "stale", reasons, heartbeatAgeSeconds };
+  }
+
+  const candleAgeMs = input.lastCandleAt ? now - input.lastCandleAt.getTime() : null;
+  if (candleAgeMs == null || candleAgeMs > CANDLE_DEGRADED_MS) {
+    reasons.push(
+      candleAgeMs == null
+        ? "no candles persisted"
+        : `candle persistence lagging ${Math.round(candleAgeMs / 60_000)}m`,
+    );
+    return { status: "degraded", reasons, heartbeatAgeSeconds };
+  }
+
+  return {
+    status: "healthy",
+    reasons: ["heartbeat, stream, and candle persistence all fresh"],
+    heartbeatAgeSeconds,
+  };
+};
 
 const formatUsd = (value: number) => currencyFormatter.format(value);
 
@@ -2054,21 +2125,44 @@ export const upsertWorkerHeartbeat = async (input: WorkerHeartbeatInput) => {
   });
 };
 
+const laterDate = (a: Date | null, b: Date | null): Date | null => {
+  if (!a) return b;
+  if (!b) return a;
+  return a.getTime() >= b.getTime() ? a : b;
+};
+
 export const getWorkerHealth = async () => {
-  const latest = await prisma.workerHeartbeat.findFirst({
-    orderBy: { heartbeatAt: "desc" },
-  });
+  // Stream/candle recency comes from LaunchState (always updated, regardless of
+  // raw-event storage), so the health classification is reliable either way.
+  const [latest, stateAgg] = await Promise.all([
+    prisma.workerHeartbeat.findFirst({ orderBy: { heartbeatAt: "desc" } }),
+    prisma.launchState.aggregate({
+      _max: { lastEventAt: true, lastPairCandleAt: true, lastTokenCandleAt: true },
+    }),
+  ]);
 
   if (!latest) return null;
+
+  const assessment = classifyStaleness({
+    heartbeatAt: latest.heartbeatAt,
+    lastStreamEventAt: stateAgg._max.lastEventAt ?? null,
+    lastCandleAt: laterDate(
+      stateAgg._max.lastPairCandleAt ?? null,
+      stateAgg._max.lastTokenCandleAt ?? null,
+    ),
+  });
 
   return {
     workerKey: latest.workerKey,
     chainName: latest.chainName,
+    streamUrl: latest.streamUrl,
     startedAt: latest.startedAt.toISOString(),
     heartbeatAt: latest.heartbeatAt.toISOString(),
+    trackedProtocolCount: latest.trackedProtocolCount,
     trackedPairCount: latest.trackedPairCount,
     pairCandleCandidateCount: latest.pairCandleCandidateCount,
     tokenCandleCandidateCount: latest.tokenCandleCandidateCount,
+    assessment,
   };
 };
 
@@ -2128,6 +2222,7 @@ export const getIngestionDiagnostics = async () => {
     statesUsingTokenFallback,
     groupedStreamEvents,
     latestWorkerHeartbeat,
+    stateRecency,
   ] = await Promise.all([
     listTrackedPairAddresses(50),
     listOhlcvCandidatePairAddresses(12),
@@ -2175,13 +2270,26 @@ export const getIngestionDiagnostics = async () => {
         heartbeatAt: "desc",
       },
     }),
+    prisma.launchState.aggregate({
+      _max: { lastEventAt: true, lastPairCandleAt: true, lastTokenCandleAt: true },
+    }),
   ]);
 
   const groupedBySource = new Map(
     groupedStreamEvents.map((event) => [event.sourceStream, event] as const),
   );
 
+  const assessment = classifyStaleness({
+    heartbeatAt: latestWorkerHeartbeat?.heartbeatAt ?? null,
+    lastStreamEventAt: stateRecency._max.lastEventAt ?? null,
+    lastCandleAt: laterDate(
+      stateRecency._max.lastPairCandleAt ?? null,
+      stateRecency._max.lastTokenCandleAt ?? null,
+    ),
+  });
+
   return {
+    assessment,
     trackedPairCount: trackedPairAddresses.length,
     pairCandleCandidateCount: pairCandleCandidateAddresses.length,
     tokenCandleCandidateCount: tokenCandleCandidateAddresses.length,
@@ -4441,4 +4549,400 @@ export const listMcpApiKeys = async (): Promise<McpApiKeyRecord[]> => {
 
 export const revokeMcpApiKey = async (id: string): Promise<void> => {
   await prisma.mcpApiKey.delete({ where: { id } });
+};
+
+// ---------------------------------------------------------------------------
+// Operational events, deploys, and approval-gated action requests (Halo ops)
+// ---------------------------------------------------------------------------
+
+// Re-export the action enums so consumers (ops-runner, web) can type against them.
+export type {
+  ActionRequestStatus,
+  ActionRiskLevel,
+  ActionType,
+  OperationalEventType,
+} from "../generated/client/index.js";
+
+const parseJsonObject = (value: string | null): Record<string, unknown> | null => {
+  if (!value) return null;
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : null;
+  } catch {
+    return null;
+  }
+};
+
+const severityOrder: Severity[] = ["info", "warn", "critical"];
+const severitiesAtOrAbove = (min: Severity): Severity[] =>
+  severityOrder.slice(severityOrder.indexOf(min));
+
+// Failure-class operational events surfaced by getRecentFailures.
+const FAILURE_EVENT_TYPES: OperationalEventType[] = [
+  "heartbeat_stale",
+  "stream_error",
+  "memo_failure",
+  "telegram_failure",
+  "action_failed",
+];
+
+const defaultActionRisk: Record<ActionType, ActionRiskLevel> = {
+  worker_restart: "medium",
+  rollback: "high",
+  health_verify: "low",
+};
+
+export type OperationalEventInput = {
+  type: OperationalEventType;
+  severity?: Severity;
+  subsystem: string;
+  title: string;
+  summary: string;
+  metadata?: Record<string, unknown> | null;
+  actionRequestId?: string | null;
+};
+
+export type OperationalEventRecord = {
+  id: string;
+  type: OperationalEventType;
+  severity: Severity;
+  subsystem: string;
+  title: string;
+  summary: string;
+  metadata: Record<string, unknown> | null;
+  actionRequestId: string | null;
+  createdAt: string;
+};
+
+export type DeployEventRecord = {
+  id: string;
+  gitSha: string;
+  shortSha: string;
+  service: string;
+  source: string;
+  previousSha: string | null;
+  detectedAt: string;
+};
+
+export type RecentFailureSummary = {
+  windowMinutes: number;
+  operationalFailures: { type: OperationalEventType; count: number; lastAt: string | null }[];
+  criticalAlertCount: number;
+  totalFailures: number;
+  events: OperationalEventRecord[];
+};
+
+export type ActionRequestRecord = {
+  id: string;
+  actionType: ActionType;
+  status: ActionRequestStatus;
+  riskLevel: ActionRiskLevel;
+  title: string;
+  reason: string;
+  payload: Record<string, unknown> | null;
+  proposedBy: string;
+  resolvedBy: string | null;
+  result: Record<string, unknown> | null;
+  createdAt: string;
+  approvedAt: string | null;
+  rejectedAt: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
+};
+
+const toOperationalEventRecord = (row: OperationalEventRow): OperationalEventRecord => ({
+  id: row.id,
+  type: row.type,
+  severity: row.severity,
+  subsystem: row.subsystem,
+  title: row.title,
+  summary: row.summary,
+  metadata: parseJsonObject(row.metadataJson),
+  actionRequestId: row.actionRequestId,
+  createdAt: row.createdAt.toISOString(),
+});
+
+const toDeployEventRecord = (row: DeployEventRow): DeployEventRecord => ({
+  id: row.id,
+  gitSha: row.gitSha,
+  shortSha: row.shortSha,
+  service: row.service,
+  source: row.source,
+  previousSha: row.previousSha,
+  detectedAt: row.detectedAt.toISOString(),
+});
+
+const toActionRequestRecord = (row: ActionRequestRow): ActionRequestRecord => ({
+  id: row.id,
+  actionType: row.actionType,
+  status: row.status,
+  riskLevel: row.riskLevel,
+  title: row.title,
+  reason: row.reason,
+  payload: parseJsonObject(row.payloadJson),
+  proposedBy: row.proposedBy,
+  resolvedBy: row.resolvedBy,
+  result: parseJsonObject(row.resultJson),
+  createdAt: row.createdAt.toISOString(),
+  approvedAt: row.approvedAt?.toISOString() ?? null,
+  rejectedAt: row.rejectedAt?.toISOString() ?? null,
+  startedAt: row.startedAt?.toISOString() ?? null,
+  completedAt: row.completedAt?.toISOString() ?? null,
+});
+
+export const recordOperationalEvent = async (
+  input: OperationalEventInput,
+): Promise<OperationalEventRecord> => {
+  const record = await prisma.operationalEvent.create({
+    data: {
+      type: input.type,
+      severity: input.severity ?? "info",
+      subsystem: input.subsystem,
+      title: input.title,
+      summary: input.summary,
+      metadataJson: input.metadata ? JSON.stringify(input.metadata) : null,
+      actionRequestId: input.actionRequestId ?? null,
+    },
+  });
+  return toOperationalEventRecord(record);
+};
+
+export const getRecentOperationalEvents = async (options?: {
+  limit?: number;
+  since?: Date;
+  types?: OperationalEventType[];
+  subsystem?: string;
+  minSeverity?: Severity;
+}): Promise<OperationalEventRecord[]> => {
+  const rows = await prisma.operationalEvent.findMany({
+    where: {
+      ...(options?.since ? { createdAt: { gte: options.since } } : {}),
+      ...(options?.types && options.types.length > 0 ? { type: { in: options.types } } : {}),
+      ...(options?.subsystem ? { subsystem: options.subsystem } : {}),
+      ...(options?.minSeverity
+        ? { severity: { in: severitiesAtOrAbove(options.minSeverity) } }
+        : {}),
+    },
+    orderBy: { createdAt: "desc" },
+    take: options?.limit ?? 50,
+  });
+  return rows.map(toOperationalEventRecord);
+};
+
+// Idempotent: a no-op when the latest deploy for the service already has this
+// SHA. Otherwise records a DeployEvent plus a companion `deploy` event.
+export const recordDeployEvent = async (input: {
+  gitSha: string;
+  service?: string;
+  source?: string;
+  previousSha?: string | null;
+  metadata?: Record<string, unknown> | null;
+}): Promise<{ recorded: boolean; deploy: DeployEventRecord }> => {
+  const service = input.service ?? "jaguar-worker";
+  const last = await prisma.deployEvent.findFirst({
+    where: { service },
+    orderBy: { detectedAt: "desc" },
+  });
+
+  if (last && last.gitSha === input.gitSha) {
+    return { recorded: false, deploy: toDeployEventRecord(last) };
+  }
+
+  const shortSha = input.gitSha.slice(0, 7);
+  const created = await prisma.deployEvent.create({
+    data: {
+      gitSha: input.gitSha,
+      shortSha,
+      service,
+      source: input.source ?? "worker_boot",
+      previousSha: input.previousSha ?? last?.gitSha ?? null,
+      metadataJson: input.metadata ? JSON.stringify(input.metadata) : null,
+    },
+  });
+
+  await recordOperationalEvent({
+    type: "deploy",
+    severity: "info",
+    subsystem: "deploy",
+    title: `Deploy ${shortSha} (${service})`,
+    summary: `${service} deployed at ${created.gitSha}${created.previousSha ? ` (from ${created.previousSha.slice(0, 7)})` : ""}`,
+    metadata: { gitSha: created.gitSha, service, source: created.source },
+  });
+
+  return { recorded: true, deploy: toDeployEventRecord(created) };
+};
+
+export const getRecentDeploys = async (
+  limit = 20,
+  service?: string,
+): Promise<DeployEventRecord[]> => {
+  const rows = await prisma.deployEvent.findMany({
+    where: service ? { service } : {},
+    orderBy: { detectedAt: "desc" },
+    take: limit,
+  });
+  return rows.map(toDeployEventRecord);
+};
+
+export const getRecentFailures = async (options?: {
+  windowMinutes?: number;
+  recentLimit?: number;
+}): Promise<RecentFailureSummary> => {
+  const windowMinutes = options?.windowMinutes ?? 60;
+  const since = new Date(Date.now() - windowMinutes * 60_000);
+
+  const [grouped, criticalAlertCount, events] = await Promise.all([
+    prisma.operationalEvent.groupBy({
+      by: ["type"],
+      where: { type: { in: FAILURE_EVENT_TYPES }, createdAt: { gte: since } },
+      _count: { _all: true },
+      _max: { createdAt: true },
+    }),
+    prisma.alert.count({ where: { severity: "critical", createdAt: { gte: since } } }),
+    prisma.operationalEvent.findMany({
+      where: { type: { in: FAILURE_EVENT_TYPES }, createdAt: { gte: since } },
+      orderBy: { createdAt: "desc" },
+      take: options?.recentLimit ?? 20,
+    }),
+  ]);
+
+  const operationalFailures = grouped.map((g) => ({
+    type: g.type,
+    count: g._count._all,
+    lastAt: g._max.createdAt?.toISOString() ?? null,
+  }));
+  const totalFailures = operationalFailures.reduce((sum, f) => sum + f.count, 0);
+
+  return {
+    windowMinutes,
+    operationalFailures,
+    criticalAlertCount,
+    totalFailures,
+    events: events.map(toOperationalEventRecord),
+  };
+};
+
+export const createActionRequest = async (input: {
+  actionType: ActionType;
+  riskLevel?: ActionRiskLevel;
+  title: string;
+  reason: string;
+  payload?: Record<string, unknown> | null;
+  proposedBy?: string;
+}): Promise<ActionRequestRecord> => {
+  const record = await prisma.actionRequest.create({
+    data: {
+      actionType: input.actionType,
+      riskLevel: input.riskLevel ?? defaultActionRisk[input.actionType],
+      title: input.title,
+      reason: input.reason,
+      payloadJson: input.payload ? JSON.stringify(input.payload) : null,
+      proposedBy: input.proposedBy ?? "halo",
+    },
+  });
+  return toActionRequestRecord(record);
+};
+
+export const getActionRequest = async (id: string): Promise<ActionRequestRecord | null> => {
+  const row = await prisma.actionRequest.findUnique({ where: { id } });
+  return row ? toActionRequestRecord(row) : null;
+};
+
+export const listActionRequests = async (options?: {
+  status?: ActionRequestStatus;
+  statuses?: ActionRequestStatus[];
+  limit?: number;
+}): Promise<ActionRequestRecord[]> => {
+  const statuses = options?.statuses ?? (options?.status ? [options.status] : undefined);
+  const rows = await prisma.actionRequest.findMany({
+    where: statuses && statuses.length > 0 ? { status: { in: statuses } } : {},
+    orderBy: { createdAt: "desc" },
+    take: options?.limit ?? 50,
+  });
+  return rows.map(toActionRequestRecord);
+};
+
+// Guarded transition proposed -> approved. Returns null if not currently proposed.
+export const approveActionRequest = async (
+  id: string,
+  resolvedBy: string,
+): Promise<ActionRequestRecord | null> => {
+  const updated = await prisma.actionRequest.updateMany({
+    where: { id, status: "proposed" },
+    data: { status: "approved", approvedAt: new Date(), resolvedBy },
+  });
+  if (updated.count === 0) return null;
+  return getActionRequest(id);
+};
+
+export const rejectActionRequest = async (
+  id: string,
+  resolvedBy: string,
+  reason?: string,
+): Promise<ActionRequestRecord | null> => {
+  const updated = await prisma.actionRequest.updateMany({
+    where: { id, status: "proposed" },
+    data: {
+      status: "rejected",
+      rejectedAt: new Date(),
+      resolvedBy,
+      resultJson: reason ? JSON.stringify({ rejectionReason: reason }) : null,
+    },
+  });
+  if (updated.count === 0) return null;
+  return getActionRequest(id);
+};
+
+// Atomically claim the oldest approved action for execution. The updateMany
+// status guard makes this race-safe: a count of 0 means another runner won.
+export const claimNextApprovedAction = async (
+  allowedTypes?: ActionType[],
+): Promise<ActionRequestRecord | null> => {
+  const candidate = await prisma.actionRequest.findFirst({
+    where: {
+      status: "approved",
+      ...(allowedTypes && allowedTypes.length > 0 ? { actionType: { in: allowedTypes } } : {}),
+    },
+    orderBy: { createdAt: "asc" },
+  });
+  if (!candidate) return null;
+
+  const claimed = await prisma.actionRequest.updateMany({
+    where: { id: candidate.id, status: "approved" },
+    data: { status: "executing", startedAt: new Date() },
+  });
+  if (claimed.count === 0) return null;
+
+  return getActionRequest(candidate.id);
+};
+
+// Guarded transition executing -> executed|failed, plus a companion event.
+export const completeActionRequest = async (input: {
+  id: string;
+  outcome: "executed" | "failed";
+  result?: Record<string, unknown> | null;
+}): Promise<ActionRequestRecord | null> => {
+  const updated = await prisma.actionRequest.updateMany({
+    where: { id: input.id, status: "executing" },
+    data: {
+      status: input.outcome,
+      completedAt: new Date(),
+      resultJson: input.result ? JSON.stringify(input.result) : null,
+    },
+  });
+  if (updated.count === 0) return null;
+
+  const row = await getActionRequest(input.id);
+  if (row) {
+    await recordOperationalEvent({
+      type: input.outcome === "executed" ? "action_executed" : "action_failed",
+      severity: input.outcome === "executed" ? "info" : "critical",
+      subsystem: "ops-runner",
+      title: `${row.actionType} ${input.outcome}`,
+      summary: row.title,
+      metadata: input.result ?? null,
+      actionRequestId: row.id,
+    });
+  }
+  return row;
 };
