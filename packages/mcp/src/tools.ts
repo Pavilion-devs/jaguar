@@ -275,11 +275,11 @@ export const TOOLS: ToolDef[] = [
       const ageSeconds = Math.round((Date.now() - new Date(health.heartbeatAt).getTime()) / 1000);
       return text(
         [
-          `WORKER STATUS: ${ageSeconds < 60 ? "HEALTHY" : "STALE"}`,
-          `Health: ${health.assessment.status.toUpperCase()} — ${health.assessment.reasons.join("; ")}`,
+          `WORKER STATUS: ${health.assessment.status.toUpperCase()}`,
+          `Reason: ${health.assessment.reasons.join("; ")}`,
           `Chain: ${health.chainName} | Tracked protocols: ${health.trackedProtocolCount} | Tracked pairs: ${health.trackedPairCount}`,
           `Stream: ${health.streamUrl}`,
-          `Last heartbeat: ${health.heartbeatAt} (${ageSeconds}s ago)`,
+          `Last heartbeat: ${health.heartbeatAt} (${ageSeconds}s ago, heartbeat ${ageSeconds < 60 ? "fresh" : "STALE"})`,
           `Started: ${health.startedAt}`,
         ].join("\n"),
       );

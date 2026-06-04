@@ -47,6 +47,26 @@ const parsePositiveNumber = (value: string | undefined, fallback: number) => {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 };
 
+// GoldRush stream/GraphQL errors are often plain objects, not Error instances —
+// String(error) on those yields a useless "[object Object]". Extract a real
+// message so operational events carry the actual failure cause.
+const errorSummary = (error: unknown): string => {
+  if (error instanceof Error) return error.message;
+  if (typeof error === "string") return error;
+  if (error && typeof error === "object") {
+    const obj = error as { message?: unknown; reason?: unknown };
+    if (typeof obj.message === "string") return obj.message;
+    if (typeof obj.reason === "string") return obj.reason;
+    try {
+      const json = JSON.stringify(error);
+      if (json && json !== "{}") return json;
+    } catch {
+      // fall through to String()
+    }
+  }
+  return String(error);
+};
+
 const ANALYST_COOLDOWN_MS = parsePositiveNumber(
   process.env.JAGUAR_AUTONOMOUS_ANALYST_COOLDOWN_MS,
   60 * 60_000,
@@ -255,7 +275,7 @@ class AutonomousAnalyst {
         severity: "warn",
         subsystem: "analyst",
         title: `Memo generation failed for ${result.pairAddress}`,
-        summary: error instanceof Error ? error.message : String(error),
+        summary: errorSummary(error),
         metadata: { pairAddress: result.pairAddress, triggers: result.analystTriggers },
       }).catch(() => undefined);
     }
@@ -362,7 +382,7 @@ class TelegramEnterNotifier {
         severity: "warn",
         subsystem: "telegram",
         title: "Telegram operator alert drain failed",
-        summary: error instanceof Error ? error.message : String(error),
+        summary: errorSummary(error),
       }).catch(() => undefined);
     } finally {
       this.isDraining = false;
@@ -386,7 +406,7 @@ class TelegramEnterNotifier {
           status: "delivered",
         });
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
+        const message = errorSummary(error);
         await recordPersonalTelegramAlertDelivery({
           alertId: alert.alertId,
           launchId: alert.launchId,
@@ -729,7 +749,7 @@ class UpdateStreamCoordinator {
             severity: "warn",
             subsystem: "ingestion",
             title: "updatePairs subscription error",
-            summary: error instanceof Error ? error.message : String(error),
+            summary: errorSummary(error),
             metadata: { stream: "updatePairs" },
           }).catch(() => undefined);
           this.scheduleReconnect("updatePairs subscription error", subscriptionVersion);
@@ -781,7 +801,7 @@ class UpdateStreamCoordinator {
               severity: "warn",
               subsystem: "ingestion",
               title: "ohlcvCandlesForPair subscription error",
-              summary: error instanceof Error ? error.message : String(error),
+              summary: errorSummary(error),
               metadata: { stream: "ohlcvCandlesForPair" },
             }).catch(() => undefined);
             this.scheduleReconnect("ohlcvCandlesForPair subscription error", subscriptionVersion);
@@ -841,7 +861,7 @@ class UpdateStreamCoordinator {
               severity: "warn",
               subsystem: "ingestion",
               title: "ohlcvCandlesForToken subscription error",
-              summary: error instanceof Error ? error.message : String(error),
+              summary: errorSummary(error),
               metadata: { stream: "ohlcvCandlesForToken" },
             }).catch(() => undefined);
             this.scheduleReconnect("ohlcvCandlesForToken subscription error", subscriptionVersion);
@@ -967,7 +987,7 @@ const main = async () => {
         severity: "warn",
         subsystem: "worker",
         title: "Worker heartbeat write failed",
-        summary: error instanceof Error ? error.message : String(error),
+        summary: errorSummary(error),
       }).catch(() => undefined);
     });
   }, HEARTBEAT_INTERVAL_MS);
@@ -1071,7 +1091,7 @@ const main = async () => {
           severity: "warn",
           subsystem: "ingestion",
           title: "newPairs subscription error",
-          summary: error instanceof Error ? error.message : String(error),
+          summary: errorSummary(error),
           metadata: { stream: "newPairs" },
         }).catch(() => undefined);
         scheduleNewPairsReconnect("newPairs subscription error", subscriptionVersion);
