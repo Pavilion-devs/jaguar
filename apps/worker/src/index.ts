@@ -36,6 +36,7 @@ import { loadWorkerEnv } from "./env.js";
 const MAX_TRACKED_PAIRS = 50;
 const MAX_CANDLE_PAIRS = 12;
 const MAX_CANDLE_TOKENS = 24;
+const GOLDRUSH_SUBSCRIPTION_BATCH_SIZE = 5;
 const HEARTBEAT_INTERVAL_MS = 20_000;
 const MIN_SUBSCRIPTION_REFRESH_MS = 15_000;
 const STREAM_RECONNECT_DELAY_MS = 5_000;
@@ -45,6 +46,14 @@ const MAX_ANALYST_QUEUE = 25;
 const parsePositiveNumber = (value: string | undefined, fallback: number) => {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+};
+
+const chunkAddresses = (addresses: string[]) => {
+  const batches: string[][] = [];
+  for (let index = 0; index < addresses.length; index += GOLDRUSH_SUBSCRIPTION_BATCH_SIZE) {
+    batches.push(addresses.slice(index, index + GOLDRUSH_SUBSCRIPTION_BATCH_SIZE));
+  }
+  return batches;
 };
 
 // GoldRush stream/GraphQL errors are often plain objects, not Error instances —
@@ -483,9 +492,9 @@ class UpdateStreamCoordinator {
   private candlePairAddresses: string[] = [];
   private candleTokenAddresses: string[] = [];
   private refreshTimer: NodeJS.Timeout | null = null;
-  private disposeUpdateStream: (() => void) | null = null;
-  private disposePairCandleStream: (() => void) | null = null;
-  private disposeTokenCandleStream: (() => void) | null = null;
+  private disposeUpdateStreams: (() => void)[] = [];
+  private disposePairCandleStreams: (() => void)[] = [];
+  private disposeTokenCandleStreams: (() => void)[] = [];
   private reconnectTimer: NodeJS.Timeout | null = null;
   private idleWatchdogTimer: NodeJS.Timeout | null = null;
   private lastSubscriptionRefreshAt = 0;
@@ -685,15 +694,15 @@ class UpdateStreamCoordinator {
 
     const subscriptionVersion = this.activeSubscriptionVersion + 1;
     this.activeSubscriptionVersion = subscriptionVersion;
-    const previousDispose = this.disposeUpdateStream;
-    this.disposeUpdateStream = null;
-    previousDispose?.();
-    const previousPairCandleDispose = this.disposePairCandleStream;
-    this.disposePairCandleStream = null;
-    previousPairCandleDispose?.();
-    const previousTokenCandleDispose = this.disposeTokenCandleStream;
-    this.disposeTokenCandleStream = null;
-    previousTokenCandleDispose?.();
+    const previousUpdateDisposes = this.disposeUpdateStreams;
+    this.disposeUpdateStreams = [];
+    for (const dispose of previousUpdateDisposes) dispose();
+    const previousPairCandleDisposes = this.disposePairCandleStreams;
+    this.disposePairCandleStreams = [];
+    for (const dispose of previousPairCandleDisposes) dispose();
+    const previousTokenCandleDisposes = this.disposeTokenCandleStreams;
+    this.disposeTokenCandleStreams = [];
+    for (const dispose of previousTokenCandleDisposes) dispose();
 
     if (this.trackedPairAddresses.length === 0) {
       console.log("No tracked pairs yet. Waiting for newPairs events.");
@@ -701,17 +710,15 @@ class UpdateStreamCoordinator {
     }
 
     this.lastStreamEventAt = Date.now();
+    const updateBatches = chunkAddresses(this.trackedPairAddresses);
     console.log(
-      `Subscribing to updatePairs for ${this.trackedPairAddresses.length} live pair addresses.`,
+      `Subscribing to updatePairs for ${this.trackedPairAddresses.length} live pair addresses across ${updateBatches.length} batches.`,
     );
 
     this.startIdleWatchdog(subscriptionVersion);
 
-    this.disposeUpdateStream = subscribeToUpdatePairs(
-      this.client,
-      this.chainName,
-      this.trackedPairAddresses,
-      {
+    this.disposeUpdateStreams = updateBatches.map((pairAddresses, batchIndex) =>
+      subscribeToUpdatePairs(this.client, this.chainName, pairAddresses, {
         next: async (event) => {
           this.markStreamEvent();
           const result = await this.runSerial(() => applyLaunchUpdate(event));
@@ -750,7 +757,11 @@ class UpdateStreamCoordinator {
             subsystem: "ingestion",
             title: "updatePairs subscription error",
             summary: errorSummary(error),
-            metadata: { stream: "updatePairs" },
+            metadata: {
+              stream: "updatePairs",
+              batchIndex,
+              batchSize: pairAddresses.length,
+            },
           }).catch(() => undefined);
           this.scheduleReconnect("updatePairs subscription error", subscriptionVersion);
         },
@@ -761,62 +772,69 @@ class UpdateStreamCoordinator {
           console.warn("updatePairs subscription completed");
           this.scheduleReconnect("updatePairs subscription completed", subscriptionVersion);
         },
-      },
+      }),
     );
 
     if (this.candlePairAddresses.length > 0) {
+      const pairCandleBatches = chunkAddresses(this.candlePairAddresses);
       console.log(
-        `Subscribing to ohlcvCandlesForPair for ${this.candlePairAddresses.length} candidate pair addresses.`,
+        `Subscribing to ohlcvCandlesForPair for ${this.candlePairAddresses.length} candidate pair addresses across ${pairCandleBatches.length} batches.`,
       );
 
-      this.disposePairCandleStream = subscribeToPairOhlcvCandles(
-        this.client,
-        this.chainName,
-        this.candlePairAddresses,
-        {
-          interval: "ONE_MINUTE",
-          timeframe: "ONE_HOUR",
-          limit: 250,
-        },
-        {
-          next: async (event) => {
-            this.markStreamEvent();
-            const result = await this.runSerial(() => applyPairOhlcvCandle(event));
-
-            if (result.duplicate) {
-              return;
-            }
-
-            this.autonomousAnalyst.consider(result);
-            this.telegramNotifier.consider(result);
-
-            console.log(
-              `[ohlcvCandlesForPair] ${event.pair_address} -> ${result.verdict.toUpperCase()} (${result.score})`,
-            );
+      this.disposePairCandleStreams = pairCandleBatches.map((pairAddresses, batchIndex) =>
+        subscribeToPairOhlcvCandles(
+          this.client,
+          this.chainName,
+          pairAddresses,
+          {
+            interval: "ONE_MINUTE",
+            timeframe: "ONE_HOUR",
+            limit: 250,
           },
-          error: (error) => {
-            console.error("ohlcvCandlesForPair subscription error", error);
-            void recordOperationalEvent({
-              type: "stream_error",
-              severity: "warn",
-              subsystem: "ingestion",
-              title: "ohlcvCandlesForPair subscription error",
-              summary: errorSummary(error),
-              metadata: { stream: "ohlcvCandlesForPair" },
-            }).catch(() => undefined);
-            this.scheduleReconnect("ohlcvCandlesForPair subscription error", subscriptionVersion);
+          {
+            next: async (event) => {
+              this.markStreamEvent();
+              const result = await this.runSerial(() => applyPairOhlcvCandle(event));
+
+              if (result.duplicate) {
+                return;
+              }
+
+              this.autonomousAnalyst.consider(result);
+              this.telegramNotifier.consider(result);
+
+              console.log(
+                `[ohlcvCandlesForPair] ${event.pair_address} -> ${result.verdict.toUpperCase()} (${result.score})`,
+              );
+            },
+            error: (error) => {
+              console.error("ohlcvCandlesForPair subscription error", error);
+              void recordOperationalEvent({
+                type: "stream_error",
+                severity: "warn",
+                subsystem: "ingestion",
+                title: "ohlcvCandlesForPair subscription error",
+                summary: errorSummary(error),
+                metadata: {
+                  stream: "ohlcvCandlesForPair",
+                  batchIndex,
+                  batchSize: pairAddresses.length,
+                },
+              }).catch(() => undefined);
+              this.scheduleReconnect("ohlcvCandlesForPair subscription error", subscriptionVersion);
+            },
+            complete: () => {
+              if (this.isStaleSubscriptionSignal(subscriptionVersion)) {
+                return;
+              }
+              console.warn("ohlcvCandlesForPair subscription completed");
+              this.scheduleReconnect(
+                "ohlcvCandlesForPair subscription completed",
+                subscriptionVersion,
+              );
+            },
           },
-          complete: () => {
-            if (this.isStaleSubscriptionSignal(subscriptionVersion)) {
-              return;
-            }
-            console.warn("ohlcvCandlesForPair subscription completed");
-            this.scheduleReconnect(
-              "ohlcvCandlesForPair subscription completed",
-              subscriptionVersion,
-            );
-          },
-        },
+        ),
       );
     } else {
       console.log(
@@ -825,58 +843,68 @@ class UpdateStreamCoordinator {
     }
 
     if (this.candleTokenAddresses.length > 0) {
+      const tokenCandleBatches = chunkAddresses(this.candleTokenAddresses);
       console.log(
-        `Subscribing to ohlcvCandlesForToken for ${this.candleTokenAddresses.length} candidate token addresses.`,
+        `Subscribing to ohlcvCandlesForToken for ${this.candleTokenAddresses.length} candidate token addresses across ${tokenCandleBatches.length} batches.`,
       );
 
-      this.disposeTokenCandleStream = subscribeToTokenOhlcvCandles(
-        this.client,
-        this.chainName,
-        this.candleTokenAddresses,
-        {
-          interval: "ONE_MINUTE",
-          timeframe: "ONE_HOUR",
-          limit: 250,
-        },
-        {
-          next: async (event) => {
-            this.markStreamEvent();
-            const result = await this.runSerial(() => applyTokenOhlcvCandle(event));
-
-            if (result.duplicate) {
-              return;
-            }
-
-            this.autonomousAnalyst.consider(result);
-            this.telegramNotifier.consider(result);
-
-            console.log(
-              `[ohlcvCandlesForToken] ${result.pairAddress} -> ${result.verdict.toUpperCase()} (${result.score})`,
-            );
+      this.disposeTokenCandleStreams = tokenCandleBatches.map((tokenAddresses, batchIndex) =>
+        subscribeToTokenOhlcvCandles(
+          this.client,
+          this.chainName,
+          tokenAddresses,
+          {
+            interval: "ONE_MINUTE",
+            timeframe: "ONE_HOUR",
+            limit: 250,
           },
-          error: (error) => {
-            console.error("ohlcvCandlesForToken subscription error", error);
-            void recordOperationalEvent({
-              type: "stream_error",
-              severity: "warn",
-              subsystem: "ingestion",
-              title: "ohlcvCandlesForToken subscription error",
-              summary: errorSummary(error),
-              metadata: { stream: "ohlcvCandlesForToken" },
-            }).catch(() => undefined);
-            this.scheduleReconnect("ohlcvCandlesForToken subscription error", subscriptionVersion);
+          {
+            next: async (event) => {
+              this.markStreamEvent();
+              const result = await this.runSerial(() => applyTokenOhlcvCandle(event));
+
+              if (result.duplicate) {
+                return;
+              }
+
+              this.autonomousAnalyst.consider(result);
+              this.telegramNotifier.consider(result);
+
+              console.log(
+                `[ohlcvCandlesForToken] ${result.pairAddress} -> ${result.verdict.toUpperCase()} (${result.score})`,
+              );
+            },
+            error: (error) => {
+              console.error("ohlcvCandlesForToken subscription error", error);
+              void recordOperationalEvent({
+                type: "stream_error",
+                severity: "warn",
+                subsystem: "ingestion",
+                title: "ohlcvCandlesForToken subscription error",
+                summary: errorSummary(error),
+                metadata: {
+                  stream: "ohlcvCandlesForToken",
+                  batchIndex,
+                  batchSize: tokenAddresses.length,
+                },
+              }).catch(() => undefined);
+              this.scheduleReconnect(
+                "ohlcvCandlesForToken subscription error",
+                subscriptionVersion,
+              );
+            },
+            complete: () => {
+              if (this.isStaleSubscriptionSignal(subscriptionVersion)) {
+                return;
+              }
+              console.warn("ohlcvCandlesForToken subscription completed");
+              this.scheduleReconnect(
+                "ohlcvCandlesForToken subscription completed",
+                subscriptionVersion,
+              );
+            },
           },
-          complete: () => {
-            if (this.isStaleSubscriptionSignal(subscriptionVersion)) {
-              return;
-            }
-            console.warn("ohlcvCandlesForToken subscription completed");
-            this.scheduleReconnect(
-              "ohlcvCandlesForToken subscription completed",
-              subscriptionVersion,
-            );
-          },
-        },
+        ),
       );
     } else {
       console.log(
@@ -898,9 +926,9 @@ class UpdateStreamCoordinator {
       clearInterval(this.idleWatchdogTimer);
     }
 
-    this.disposeUpdateStream?.();
-    this.disposePairCandleStream?.();
-    this.disposeTokenCandleStream?.();
+    for (const dispose of this.disposeUpdateStreams) dispose();
+    for (const dispose of this.disposePairCandleStreams) dispose();
+    for (const dispose of this.disposeTokenCandleStreams) dispose();
   }
 }
 
