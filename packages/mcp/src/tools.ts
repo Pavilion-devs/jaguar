@@ -25,10 +25,10 @@ import {
 import type { Persona } from "@jaguar/domain";
 import { z } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
-import { assertOperatorSecret } from "./operator-secret.js";
-import { getRunbook, searchRunbooks } from "./runbooks.js";
+import { assertOperatorSecret } from "./operator-secret";
+import { getRunbook, searchRunbooks } from "./runbooks";
 
-export { assertOperatorSecret } from "./operator-secret.js";
+export { assertOperatorSecret } from "./operator-secret";
 
 export type ToolContent = {
   content: { type: "text"; text: string }[];
